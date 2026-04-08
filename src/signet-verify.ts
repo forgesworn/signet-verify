@@ -51,31 +51,17 @@ export interface SignetVerifyOptions {
   acceptUnconfirmed?: boolean;
 }
 
-/** The presentation request sent to the app */
-interface PresentationRequest {
-  type: 'signet-verify-request';
-  requestId: string;
-  requiredAgeRange: string;
-  callbackUrl?: string;
-  relayUrl?: string;
-  timestamp: number;
-}
+/**
+ * Canonical types from signet-protocol.
+ * Using import type to avoid runtime dependency (this SDK is bundled as IIFE).
+ */
+import type { VerifyRequest, VerifyResponse } from 'signet-protocol';
 
-/** The presentation response from the app */
-interface PresentationResponse {
-  type: 'signet-verify-response';
-  requestId: string;
-  credential: {
-    id: string;
-    kind: number;
-    pubkey: string; // verifier pubkey
-    tags: string[][];
-    content: string;
-    sig: string;
-    created_at: number;
-  };
-  subjectPubkey: string;
-}
+/** @deprecated Use VerifyRequest from signet-protocol */
+type PresentationRequest = VerifyRequest;
+
+/** @deprecated Use VerifyResponse from signet-protocol */
+type PresentationResponse = VerifyResponse;
 
 // Escape HTML special characters to prevent XSS in innerHTML
 function escapeHtml(str: string): string {

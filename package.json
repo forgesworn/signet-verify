@@ -17,6 +17,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
+    "signet-protocol": "file:../signet",
     "typescript": "^5.7.0"
   },
   "license": "MIT",
