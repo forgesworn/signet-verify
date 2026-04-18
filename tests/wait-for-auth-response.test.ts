@@ -68,7 +68,7 @@ afterEach(() => {
 
 // ── Fixture builder ──────────────────────────────────────────────────────────
 // Produces a well-formed NIP-17 gift-wrap of a kind-29999 event whose content
-// is an AuthResponse with an embedded signed kind-27235 auth event.
+// is an AuthResponse with an embedded signed kind-21236 auth event.
 
 function computeId(evt: { pubkey: string; created_at: number; kind: number; tags: string[][]; content: string }): string {
   const ser = JSON.stringify([0, evt.pubkey, evt.created_at, evt.kind, evt.tags, evt.content]);
@@ -93,13 +93,13 @@ function buildAuthGiftWrap(args: {
   const userPubkeyHex = bytesToHex(schnorr.getPublicKey(args.userPrivKey));
   const status = args.status ?? 'approved';
 
-  // ── Build a signed kind-27235 auth event ──
+  // ── Build a signed kind-21236 auth event ──
   const challengeTagValue = args.tamperChallengeTag ?? args.requestId;
   const originTagValue = args.tamperOriginTag ?? args.origin;
   const aeCreatedAt = args.staleAuthEventCreatedAt ?? Math.floor(Date.now() / 1000);
 
   const signedAuthEvent = finalizeEvent({
-    kind: 27235,
+    kind: 21236,
     created_at: aeCreatedAt,
     tags: [['challenge', challengeTagValue], ['origin', originTagValue]],
     content: '',
@@ -221,7 +221,7 @@ describe('waitForAuthResponse — happy path', () => {
 
     const result = await promise;
     expect(result.pubkey).toBe(userPubkeyHex);
-    expect(result.authEvent.kind).toBe(27235);
+    expect(result.authEvent.kind).toBe(21236);
     expect(result.authEvent.id).toMatch(/^[0-9a-f]{64}$/);
     expect(result.authEvent.sig).toMatch(/^[0-9a-f]{128}$/);
     expect(result.authEvent.tags).toEqual(expect.arrayContaining([
@@ -416,6 +416,6 @@ describe('waitForAuthResponse — ignores invalid events', () => {
     lastWs!.deliver(wrap);
 
     const result = await promise;
-    expect(result.authEvent.kind).toBe(27235);
+    expect(result.authEvent.kind).toBe(21236);
   });
 });

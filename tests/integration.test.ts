@@ -68,9 +68,9 @@ function buildGiftWrap(args: {
 }) {
   const userPubkey = bytesToHex(schnorr.getPublicKey(args.userPrivKey));
 
-  // Kind-27235 signed auth event
+  // Kind-21236 signed auth event
   const signedAuthEvent = finalizeEvent({
-    kind: 27235,
+    kind: 21236,
     created_at: Math.floor(Date.now() / 1000),
     tags: [['challenge', args.requestId], ['origin', args.origin]],
     content: '',
@@ -142,7 +142,7 @@ describeIf('integration — real-relay round-trip', () => {
 
     const result = await authPromise;
     expect(result.pubkey).toBe(userPubkeyHex);
-    expect(result.authEvent.kind).toBe(27235);
+    expect(result.authEvent.kind).toBe(21236);
     expect(result.authEvent.id).toMatch(/^[0-9a-f]{64}$/);
     expect(result.authEvent.sig).toMatch(/^[0-9a-f]{128}$/);
     const challengeTag = result.authEvent.tags.find(t => t[0] === 'challenge');

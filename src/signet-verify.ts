@@ -370,11 +370,11 @@ export interface WaitForAuthOptions {
   timeout?: number;
 }
 
-/** Full signed Kind-27235 auth event as carried in the AuthResponse. */
+/** Full signed Kind-21236 auth event as carried in the AuthResponse. */
 export interface SignetAuthEvent {
   id: string;
   pubkey: string;
-  kind: 27235;
+  kind: 21236;
   created_at: number;
   tags: string[][];
   content: string;
@@ -385,7 +385,7 @@ export interface SignetAuthEvent {
 export interface SignetAuthResult {
   /** The user's pubkey (64-char hex x-only) — copy of `authEvent.pubkey` for convenience. */
   pubkey: string;
-  /** The verified, signed Kind-27235 auth event — the raw cryptographic proof. */
+  /** The verified, signed Kind-21236 auth event — the raw cryptographic proof. */
   authEvent: SignetAuthEvent;
   /** Optional credential included in the response (Signet Login flows). */
   credential?: unknown;
@@ -586,14 +586,14 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       if (inner.type !== 'signet-auth-response') return;
       if (inner.requestId !== requestIdLower) return;
 
-      // Extract and validate the embedded signed kind-27235 auth event
+      // Extract and validate the embedded signed kind-21236 auth event
       if (typeof inner.authEvent !== 'object' || inner.authEvent === null) return;
       const ae = inner.authEvent as Record<string, unknown>;
 
       if (typeof ae.id !== 'string' || !/^[0-9a-f]{64}$/i.test(ae.id)) return;
       if (typeof ae.pubkey !== 'string' || !/^[0-9a-f]{64}$/i.test(ae.pubkey)) return;
       if (typeof ae.sig !== 'string' || !/^[0-9a-f]{128}$/i.test(ae.sig)) return;
-      if (ae.kind !== 27235) return;
+      if (ae.kind !== 21236) return;
       if (typeof ae.created_at !== 'number') return;
       if (!Array.isArray(ae.tags)) return;
       if (typeof ae.content !== 'string') return;
@@ -605,7 +605,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       const expectedAuthEventId = computeNostrEventId({
         pubkey: ae.pubkey as string,
         created_at: ae.created_at as number,
-        kind: 27235,
+        kind: 21236,
         tags: ae.tags as string[][],
         content: ae.content as string,
       });
@@ -637,7 +637,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       const verifiedAuthEvent: SignetAuthEvent = {
         id: (ae.id as string).toLowerCase(),
         pubkey: (ae.pubkey as string).toLowerCase(),
-        kind: 27235,
+        kind: 21236,
         created_at: ae.created_at as number,
         tags: aeTags,
         content: ae.content as string,
