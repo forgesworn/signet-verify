@@ -1,6 +1,6 @@
 {
   "name": "signet-verify",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Signet SDK — website age verification and cross-device Sign-in-with-Signet",
   "type": "module",
   "main": "./dist/signet-verify.js",

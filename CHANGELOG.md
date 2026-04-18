@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 (2026-04-18)
+
+### Bug Fixes
+
+- use published signet-protocol@^1.6.0, not file:../signet (deps)
+
+
+
 ## 0.2.0 (2026-04-18)
 
 ### Features
