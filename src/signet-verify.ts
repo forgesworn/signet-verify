@@ -86,6 +86,9 @@ import { schnorr } from '@noble/curves/secp256k1';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
 
+// NIP-44 v2 decrypt for NIP-17 gift-wrap unwrapping (cross-device auth flow)
+import { decrypt as nip44Decrypt, getConversationKey } from 'nostr-tools/nip44';
+
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < bytes.length; i++) {
@@ -347,7 +350,315 @@ export async function verifyAge(requiredAgeRange: string, options?: Partial<Sign
   });
 }
 
+// ── Cross-device auth response subscription ──────────────────────────────────
+
+/** Options for waiting on a cross-device Sign-in-with-Signet response. */
+export interface WaitForAuthOptions {
+  /** The challenge (also the `requestId`) sent in the auth URL. 64-char hex. */
+  requestId: string;
+  /** The `wss://` relay URL the consumer subscribed on. */
+  relayUrl: string;
+  /** The consumer's ephemeral session private key (32 bytes). Used to NIP-17 unwrap the response. */
+  sessionPrivKey: Uint8Array;
+  /**
+   * The consumer origin (e.g. `https://example.com`). The signed auth event must
+   * carry a matching `origin` tag — this prevents a response addressed to a different
+   * site from being accepted. Must be supplied verbatim (scheme + host + optional port).
+   */
+  expectedOrigin: string;
+  /** Timeout in milliseconds. Clamped to [5_000, 600_000]. Default 120_000. */
+  timeout?: number;
+}
+
+/** Full signed Kind-27235 auth event as carried in the AuthResponse. */
+export interface SignetAuthEvent {
+  id: string;
+  pubkey: string;
+  kind: 27235;
+  created_at: number;
+  tags: string[][];
+  content: string;
+  sig: string;
+}
+
+/** Successful auth response — the user's signed proof of login. */
+export interface SignetAuthResult {
+  /** The user's pubkey (64-char hex x-only) — copy of `authEvent.pubkey` for convenience. */
+  pubkey: string;
+  /** The verified, signed Kind-27235 auth event — the raw cryptographic proof. */
+  authEvent: SignetAuthEvent;
+  /** Optional credential included in the response (Signet Login flows). */
+  credential?: unknown;
+  /** Unix timestamp the auth event was signed. */
+  createdAt: number;
+}
+
+// Compute a NIP-01 event ID: SHA-256 of the canonical serialisation.
+function computeNostrEventId(
+  event: { pubkey: string; created_at: number; kind: number; tags: string[][]; content: string },
+): string {
+  const serialised = JSON.stringify([0, event.pubkey, event.created_at, event.kind, event.tags, event.content]);
+  const hash = sha256(new TextEncoder().encode(serialised));
+  return bytesToHex(hash);
+}
+
+// NIP-17 unwrap: kind-1059 wrap → kind-13 seal (verified) → inner rumor event.
+// Returns the rumor or null if any step fails (decrypt error, malformed, identity mismatch).
+async function unwrapGiftWrap(
+  wrap: { pubkey: string; content: string },
+  sessionPrivKey: Uint8Array,
+): Promise<{ pubkey: string; id: string; kind: number; created_at: number; tags: string[][]; content: string } | null> {
+  try {
+    // Decrypt wrap → seal
+    const wrapConvKey = getConversationKey(sessionPrivKey, wrap.pubkey);
+    const sealJson = nip44Decrypt(wrap.content, wrapConvKey);
+    const sealParsed: unknown = JSON.parse(sealJson);
+    if (typeof sealParsed !== 'object' || sealParsed === null) return null;
+    const seal = sealParsed as Record<string, unknown>;
+
+    if (seal.kind !== 13) return null;
+    if (typeof seal.pubkey !== 'string' || !/^[0-9a-f]{64}$/i.test(seal.pubkey)) return null;
+    if (typeof seal.created_at !== 'number') return null;
+    if (!Array.isArray(seal.tags)) return null;
+    if (typeof seal.content !== 'string') return null;
+    if (typeof seal.id !== 'string' || !/^[0-9a-f]{64}$/i.test(seal.id)) return null;
+    if (typeof seal.sig !== 'string' || !/^[0-9a-f]{128}$/i.test(seal.sig)) return null;
+
+    // Verify seal event ID matches its canonical hash (tamper check)
+    const expectedSealId = computeNostrEventId({
+      pubkey: seal.pubkey,
+      created_at: seal.created_at,
+      kind: 13,
+      tags: seal.tags as string[][],
+      content: seal.content,
+    });
+    if (expectedSealId !== seal.id.toLowerCase()) return null;
+
+    // Verify seal Schnorr signature — proves it came from the claimed sender.
+    // (The rumor itself is unsigned per NIP-59; the seal's signature is the identity anchor.)
+    const sealSigBytes = hexToBytes(seal.sig);
+    const sealIdBytes = hexToBytes(seal.id);
+    const sealPubBytes = hexToBytes(seal.pubkey);
+    if (!schnorr.verify(sealSigBytes, sealIdBytes, sealPubBytes)) return null;
+
+    // Decrypt seal → rumor
+    const sealConvKey = getConversationKey(sessionPrivKey, seal.pubkey);
+    const rumorJson = nip44Decrypt(seal.content, sealConvKey);
+    const rumorParsed: unknown = JSON.parse(rumorJson);
+    if (typeof rumorParsed !== 'object' || rumorParsed === null) return null;
+    const rumor = rumorParsed as Record<string, unknown>;
+
+    if (typeof rumor.pubkey !== 'string') return null;
+    // Identity binding: rumor sender must equal seal sender.
+    if (rumor.pubkey !== seal.pubkey) return null;
+    if (typeof rumor.kind !== 'number') return null;
+    if (typeof rumor.created_at !== 'number') return null;
+    if (!Array.isArray(rumor.tags)) return null;
+    if (typeof rumor.content !== 'string') return null;
+
+    // Rumor may or may not carry an id field; compute if absent.
+    const rumorId = typeof rumor.id === 'string'
+      ? rumor.id
+      : computeNostrEventId({
+          pubkey: rumor.pubkey,
+          created_at: rumor.created_at,
+          kind: rumor.kind,
+          tags: rumor.tags as string[][],
+          content: rumor.content,
+        });
+
+    return {
+      pubkey: rumor.pubkey,
+      id: rumorId,
+      kind: rumor.kind,
+      created_at: rumor.created_at,
+      tags: rumor.tags as string[][],
+      content: rumor.content,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Wait for a cross-device Sign-in-with-Signet response on a Nostr relay.
+ *
+ * Consumer workflow: generate a session keypair, put the pubkey in the auth URL
+ * via the `sessionPubkey` param alongside `relay`, render the QR, then call this
+ * function with the matching private key. When the user approves on their phone,
+ * the Signet app publishes a NIP-17 gift-wrapped response to the relay and this
+ * function resolves with the verified auth result.
+ *
+ * Rejects with `Error(message)` where message is one of:
+ *   - `'denied'` — user rejected the request
+ *   - `'timeout'` — no valid response within the timeout
+ *   - `'relay-error'` — WebSocket connection failure
+ *   - `'invalid-request-id'` / `'invalid-session-privkey'` / `'invalid-relay-url'` — bad input
+ */
+export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<SignetAuthResult> {
+  if (!/^[0-9a-f]{64}$/i.test(options.requestId)) {
+    throw new Error('invalid-request-id');
+  }
+  if (!(options.sessionPrivKey instanceof Uint8Array) || options.sessionPrivKey.length !== 32) {
+    throw new Error('invalid-session-privkey');
+  }
+  if (!/^wss:\/\//i.test(options.relayUrl) && !/^ws:\/\/(localhost|127\.0\.0\.1)([:\/]|$)/i.test(options.relayUrl)) {
+    throw new Error('invalid-relay-url');
+  }
+  if (typeof options.expectedOrigin !== 'string' || options.expectedOrigin.length === 0) {
+    throw new Error('invalid-expected-origin');
+  }
+
+  const sessionPubkey = bytesToHex(schnorr.getPublicKey(options.sessionPrivKey));
+  const timeout = Math.max(5000, Math.min(options.timeout ?? 120000, 600000));
+  const requestIdLower = options.requestId.toLowerCase();
+  const expectedOrigin = options.expectedOrigin;
+
+  return new Promise<SignetAuthResult>((resolve, reject) => {
+    const subId = `sa-${Math.random().toString(36).slice(2, 12)}`;
+    let settled = false;
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(options.relayUrl);
+    } catch {
+      reject(new Error('relay-error'));
+      return;
+    }
+
+    const settle = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try { ws.close(); } catch { /* ignore */ }
+      action();
+    };
+
+    const timer = setTimeout(() => {
+      settle(() => reject(new Error('timeout')));
+    }, timeout);
+
+    ws.onopen = () => {
+      // Subscribe slightly in the past so a racing publish isn't missed.
+      const since = Math.floor(Date.now() / 1000) - 60;
+      ws.send(JSON.stringify(['REQ', subId, { kinds: [1059], '#p': [sessionPubkey], since }]));
+    };
+
+    ws.onmessage = async (msgEvent: MessageEvent) => {
+      if (settled) return;
+      let msg: unknown;
+      try {
+        msg = JSON.parse(typeof msgEvent.data === 'string' ? msgEvent.data : '');
+      } catch {
+        return;
+      }
+      if (!Array.isArray(msg)) return;
+      if (msg[0] !== 'EVENT' || msg[1] !== subId) return;
+      const wrap = msg[2];
+      if (typeof wrap !== 'object' || wrap === null) return;
+      const w = wrap as Record<string, unknown>;
+      if (w.kind !== 1059 || typeof w.pubkey !== 'string' || typeof w.content !== 'string') return;
+
+      const rumor = await unwrapGiftWrap({ pubkey: w.pubkey, content: w.content }, options.sessionPrivKey);
+      if (!rumor || rumor.kind !== 29999) return;
+
+      const sessionTag = rumor.tags.find(t => t[0] === 'session');
+      if (!sessionTag || sessionTag[1] !== requestIdLower) return;
+
+      const statusTag = rumor.tags.find(t => t[0] === 'status');
+      if (statusTag?.[1] === 'rejected') {
+        settle(() => reject(new Error('denied')));
+        return;
+      }
+      if (statusTag?.[1] !== 'approved') return;
+
+      // Freshness check — protects against stale replays the relay might serve.
+      const ageSec = Math.abs(Date.now() / 1000 - rumor.created_at);
+      if (ageSec > 300) return;
+
+      let inner: Record<string, unknown> | null;
+      try {
+        const parsed: unknown = JSON.parse(rumor.content);
+        if (typeof parsed !== 'object' || parsed === null) return;
+        inner = parsed as Record<string, unknown>;
+      } catch {
+        return;
+      }
+      if (inner.type !== 'signet-auth-response') return;
+      if (inner.requestId !== requestIdLower) return;
+
+      // Extract and validate the embedded signed kind-27235 auth event
+      if (typeof inner.authEvent !== 'object' || inner.authEvent === null) return;
+      const ae = inner.authEvent as Record<string, unknown>;
+
+      if (typeof ae.id !== 'string' || !/^[0-9a-f]{64}$/i.test(ae.id)) return;
+      if (typeof ae.pubkey !== 'string' || !/^[0-9a-f]{64}$/i.test(ae.pubkey)) return;
+      if (typeof ae.sig !== 'string' || !/^[0-9a-f]{128}$/i.test(ae.sig)) return;
+      if (ae.kind !== 27235) return;
+      if (typeof ae.created_at !== 'number') return;
+      if (!Array.isArray(ae.tags)) return;
+      if (typeof ae.content !== 'string') return;
+      // Identity binding: the signer of the authEvent must be the sender of the rumor
+      // (both are the user, wrapped and unwrapped versions of the same identity).
+      if ((ae.pubkey as string).toLowerCase() !== rumor.pubkey.toLowerCase()) return;
+
+      // Verify the authEvent's id matches its canonical SHA-256 hash (tamper detection)
+      const expectedAuthEventId = computeNostrEventId({
+        pubkey: ae.pubkey as string,
+        created_at: ae.created_at as number,
+        kind: 27235,
+        tags: ae.tags as string[][],
+        content: ae.content as string,
+      });
+      if (expectedAuthEventId !== (ae.id as string).toLowerCase()) return;
+
+      // Verify the authEvent's Schnorr signature over its id with its claimed pubkey
+      let sigValid = false;
+      try {
+        const sigBytes = hexToBytes(ae.sig as string);
+        const idBytes = hexToBytes(ae.id as string);
+        const pubBytes = hexToBytes(ae.pubkey as string);
+        sigValid = schnorr.verify(sigBytes, idBytes, pubBytes);
+      } catch {
+        sigValid = false;
+      }
+      if (!sigValid) return;
+
+      // Validate the challenge and origin tags on the authEvent
+      const aeTags = ae.tags as string[][];
+      const challengeTag = aeTags.find(t => Array.isArray(t) && t[0] === 'challenge');
+      if (!challengeTag || typeof challengeTag[1] !== 'string' || challengeTag[1].toLowerCase() !== requestIdLower) return;
+      const originTag = aeTags.find(t => Array.isArray(t) && t[0] === 'origin');
+      if (!originTag || originTag[1] !== expectedOrigin) return;
+
+      // Freshness check on the auth event itself (the user's signature timestamp)
+      const authEventAgeSec = Math.abs(Date.now() / 1000 - (ae.created_at as number));
+      if (authEventAgeSec > 300) return;
+
+      const verifiedAuthEvent: SignetAuthEvent = {
+        id: (ae.id as string).toLowerCase(),
+        pubkey: (ae.pubkey as string).toLowerCase(),
+        kind: 27235,
+        created_at: ae.created_at as number,
+        tags: aeTags,
+        content: ae.content as string,
+        sig: ae.sig as string,
+      };
+
+      settle(() => resolve({
+        pubkey: verifiedAuthEvent.pubkey,
+        authEvent: verifiedAuthEvent,
+        credential: inner.credential,
+        createdAt: verifiedAuthEvent.created_at,
+      }));
+    };
+
+    ws.onerror = () => {
+      settle(() => reject(new Error('relay-error')));
+    };
+  });
+}
+
 // Auto-attach to window for script-tag usage
 if (typeof window !== 'undefined') {
-  (window as any).Signet = { verifyAge };
+  (window as any).Signet = { verifyAge, waitForAuthResponse };
 }

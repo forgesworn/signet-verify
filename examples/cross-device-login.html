@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in with Signet — Cross-Device Demo</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; color: #1a1a2e; line-height: 1.5; }
+    h1 { font-size: 1.5rem; margin-bottom: 8px; }
+    p.muted { color: #666; font-size: 0.9rem; }
+    .panel { border: 1px solid #e0e0e0; border-radius: 12px; padding: 20px; margin-top: 20px; }
+    .qr { display: flex; justify-content: center; padding: 20px; background: #f8f8fa; border-radius: 8px; }
+    canvas { image-rendering: pixelated; }
+    .status { padding: 12px 16px; border-radius: 8px; margin-top: 12px; font-size: 0.9rem; }
+    .status.waiting { background: #f0f4ff; color: #2c3e8f; }
+    .status.success { background: #e9f7ef; color: #1e6e3e; }
+    .status.error { background: #fce8e8; color: #9b2c2c; }
+    code { background: #f0f0f0; padding: 2px 6px; border-radius: 4px; font-size: 0.85em; }
+    .url-preview { word-break: break-all; font-size: 0.75rem; color: #666; margin-top: 12px; }
+    button { background: #2c3e8f; color: white; border: 0; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 0.95rem; }
+    button:hover { background: #3b4ea3; }
+  </style>
+</head>
+<body>
+  <h1>Sign in with Signet — cross-device demo</h1>
+  <p class="muted">Demonstrates the relay-delivery flow: this page generates a session keypair, renders a QR encoding the Signet app URL with <code>relay</code> + <code>sessionPubkey</code>, and waits for the signed auth response via NIP-17 unwrap.</p>
+
+  <div class="panel">
+    <p class="muted" style="margin-top:0">
+      <strong>Before running:</strong>
+      <br>1. Run a local Nostr relay at <code>ws://localhost:7777</code> (e.g. <code>nostr-rs-relay</code> or similar).
+      <br>2. Serve the Signet app dev server at <code>http://localhost:5174</code>.
+      <br>3. Serve this page via any static server (e.g. <code>python3 -m http.server 8080</code>) and open on your desktop browser.
+      <br>4. On your phone, open the QR link manually (or scan if you render a real QR) — it points to your desktop <code>http://localhost:5174</code> dev server (use your network IP in place of <code>localhost</code> for a real phone test).
+    </p>
+  </div>
+
+  <div class="panel">
+    <div class="qr" id="qr-container">
+      <canvas id="qr" width="240" height="240"></canvas>
+    </div>
+    <div class="url-preview" id="url-preview"></div>
+  </div>
+
+  <div class="panel">
+    <button id="start">Start login session</button>
+    <div class="status" id="status" style="display:none"></div>
+    <pre id="result" style="font-size: 0.8rem; overflow:auto; margin-top: 12px;"></pre>
+  </div>
+
+  <!-- signet-verify SDK. After building locally: `npm run build` in signet-verify/. -->
+  <script src="../dist/signet-verify.js"></script>
+  <!-- @noble/curves for session keypair generation (loaded via jsdelivr for self-contained demo). -->
+  <script type="module">
+    import { schnorr } from 'https://cdn.jsdelivr.net/npm/@noble/curves@1.8.1/secp256k1.js';
+    import { bytesToHex } from 'https://cdn.jsdelivr.net/npm/@noble/hashes@1.7.1/utils.js';
+
+    const statusEl = document.getElementById('status');
+    const resultEl = document.getElementById('result');
+    const qrCanvas = document.getElementById('qr');
+    const urlPreview = document.getElementById('url-preview');
+
+    function setStatus(type, text) {
+      statusEl.style.display = 'block';
+      statusEl.className = 'status ' + type;
+      statusEl.textContent = text;
+    }
+
+    // Tiny QR renderer using the Google Charts API as a placeholder (for real use, bundle a QR lib).
+    // This demo just renders the URL as text beneath so you can manually open it during testing.
+    function renderUrlOnly(url) {
+      const ctx = qrCanvas.getContext('2d');
+      ctx.fillStyle = '#f0f0f0';
+      ctx.fillRect(0, 0, 240, 240);
+      ctx.fillStyle = '#555';
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('(QR placeholder)', 120, 120);
+      ctx.fillText('Open URL below on phone', 120, 140);
+      urlPreview.innerHTML = '<strong>Open on phone:</strong><br><a href="' + url + '" target="_blank" rel="noopener">' + url + '</a>';
+    }
+
+    document.getElementById('start').addEventListener('click', async () => {
+      resultEl.textContent = '';
+
+      // 1. Generate ephemeral session keypair
+      const sessionPrivKey = schnorr.utils.randomPrivateKey();
+      const sessionPubkeyHex = bytesToHex(schnorr.getPublicKey(sessionPrivKey));
+
+      // 2. Generate challenge (32 bytes hex)
+      const challengeBytes = new Uint8Array(32);
+      crypto.getRandomValues(challengeBytes);
+      const challenge = bytesToHex(challengeBytes);
+
+      // 3. Build auth URL
+      //    In production, `origin` would be your actual consumer origin (the phone
+      //    must be able to reach back to it if you ever also want to do redirect).
+      //    For cross-device relay-only flows, callback origin/match still applies.
+      const origin = location.origin;
+      const callback = origin + '/callback'; // unused in relay mode, still required by grammar
+      const relay = 'ws://localhost:7777';
+      const signetAppOrigin = 'http://localhost:5174';
+
+      const authUrl = signetAppOrigin + '/?' + new URLSearchParams({
+        auth: '1',
+        challenge,
+        origin,
+        name: 'Cross-Device Demo',
+        callback,
+        t: String(Math.floor(Date.now() / 1000)),
+        relay,
+        sessionPubkey: sessionPubkeyHex,
+      }).toString();
+
+      renderUrlOnly(authUrl);
+      setStatus('waiting', 'Waiting for you to approve on your phone…');
+
+      // 4. Subscribe and wait for response
+      try {
+        const result = await window.Signet.waitForAuthResponse({
+          requestId: challenge,
+          relayUrl: relay,
+          sessionPrivKey,
+          expectedOrigin: origin,
+          timeout: 180_000,
+        });
+        setStatus('success', '✓ Signed in as ' + result.pubkey.slice(0, 16) + '…');
+        resultEl.textContent = JSON.stringify({
+          pubkey: result.pubkey,
+          authEventId: result.authEvent.id,
+          signature: result.authEvent.sig.slice(0, 32) + '…',
+          challenge: result.authEvent.tags.find(t => t[0] === 'challenge')?.[1],
+          origin: result.authEvent.tags.find(t => t[0] === 'origin')?.[1],
+          createdAt: new Date(result.createdAt * 1000).toISOString(),
+        }, null, 2);
+      } catch (err) {
+        setStatus('error', '✗ ' + (err instanceof Error ? err.message : String(err)));
+      }
+    });
+  </script>
+</body>
+</html>
