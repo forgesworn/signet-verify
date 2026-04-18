@@ -1,8 +1,11 @@
 /**
- * Signet Verify — Website Age Verification SDK
+ * Signet Verify SDK — website age verification and cross-device Sign-in-with-Signet.
  *
- * Usage:
- *   <script src="https://cdn.signet.forgesworn.dev/signet-verify.js"></script>
+ * ESM / bundler usage (npm):
+ *   import { verifyAge, waitForAuthResponse } from 'signet-verify';
+ *
+ * Script-tag / CDN usage (IIFE bundle exposes `window.Signet`):
+ *   <script src="https://cdn.signet.forgesworn.dev/signet-verify.iife.js"></script>
  *   <script>
  *     const result = await Signet.verifyAge('18+');
  *     if (result.verified) { // allow access }

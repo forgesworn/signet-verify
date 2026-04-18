@@ -1,16 +1,25 @@
 {
   "name": "signet-verify",
   "version": "0.1.0",
-  "description": "Add Signet age verification to any website — one script tag, one function call",
+  "description": "Signet SDK — website age verification and cross-device Sign-in-with-Signet",
   "type": "module",
   "main": "./dist/signet-verify.js",
   "types": "./dist/signet-verify.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/signet-verify.d.ts",
+      "import": "./dist/signet-verify.js",
+      "default": "./dist/signet-verify.js"
+    },
+    "./iife": "./dist/signet-verify.iife.js"
+  },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "esbuild src/signet-verify.ts --bundle --format=iife --global-name=Signet --outfile=dist/signet-verify.js --minify --target=es2020",
-    "build:esm": "esbuild src/signet-verify.ts --bundle --format=esm --outfile=dist/signet-verify.esm.js --minify --target=es2020",
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc && npm run build:iife",
+    "build:iife": "esbuild src/signet-verify.ts --bundle --format=iife --global-name=Signet --outfile=dist/signet-verify.iife.js --minify --target=es2020",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
