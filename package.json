@@ -30,7 +30,7 @@
   },
   "devDependencies": {
     "esbuild": "^0.25.12",
-    "signet-protocol": "file:../signet",
+    "signet-protocol": "^1.6.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.4"
   },
