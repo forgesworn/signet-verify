@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 (2026-05-03)
+
+### Bug Fixes
+
+- bump to publish 0.3.0 displayName feature to npm (#11) (release)
+
+
+
 ## 0.3.0 (2026-05-03)
 
 ### Features
