@@ -392,6 +392,14 @@ export interface SignetAuthResult {
   authEvent: SignetAuthEvent;
   /** Optional credential included in the response (Signet Login flows). */
   credential?: unknown;
+  /**
+   * Optional persona handle the user opted to share at approval time.
+   * Sanitised: control + bidi characters stripped, capped at 64 chars,
+   * empty strings dropped to undefined. Mirrors the `display_name` URL param
+   * delivered by the redirect-back flow. Treat as untrusted display content
+   * — already sanitised here, but still escape on render per usual.
+   */
+  displayName?: string;
   /** Unix timestamp the auth event was signed. */
   createdAt: number;
 }
@@ -481,6 +489,19 @@ async function unwrapGiftWrap(
   } catch {
     return null;
   }
+}
+
+// Sanitise an optional persona handle from an AuthResponse: strip control + bidi
+// chars, cap at 64, drop empty. Same character class as signet-app's
+// consumer_display_name sanitiser, kept consistent so wire→consumer and
+// consumer→wire treat the field identically.
+function sanitiseDisplayName(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const cleaned = raw
+    .replace(/[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069]/g, '')
+    .trim()
+    .slice(0, 64);
+  return cleaned.length > 0 ? cleaned : undefined;
 }
 
 /**
@@ -647,10 +668,13 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
         sig: ae.sig as string,
       };
 
+      const sanitisedDisplayName = sanitiseDisplayName(inner.displayName);
+
       settle(() => resolve({
         pubkey: verifiedAuthEvent.pubkey,
         authEvent: verifiedAuthEvent,
         credential: inner.credential,
+        ...(sanitisedDisplayName !== undefined ? { displayName: sanitisedDisplayName } : {}),
         createdAt: verifiedAuthEvent.created_at,
       }));
     };

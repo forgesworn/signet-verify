@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2 (2026-05-03)
+
+### Features
+
+- `SignetAuthResult.displayName?: string` — surfaces the user's persona handle when they opted to share it on the approval screen. Mirrors the `display_name` URL param delivered by the redirect-back flow. Sanitised on receipt: control + bidi characters stripped, capped at 64 chars, empty values dropped.
+
+
+
 ## 0.2.1 (2026-04-18)
 
 ### Bug Fixes

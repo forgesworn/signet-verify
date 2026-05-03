@@ -89,6 +89,10 @@ function buildAuthGiftWrap(args: {
   tamperAuthEventPubkey?: string;
   staleAuthEventCreatedAt?: number;
   omitAuthEvent?: boolean;
+  /** When set, included in the AuthResponse JSON. Pass `'__SKIP__'` to omit. */
+  displayName?: string;
+  /** When set, included as a non-string value to test type-rejection. */
+  displayNameNonString?: unknown;
 }) {
   const userPubkeyHex = bytesToHex(schnorr.getPublicKey(args.userPrivKey));
   const status = args.status ?? 'approved';
@@ -118,6 +122,12 @@ function buildAuthGiftWrap(args: {
   };
   if (!args.omitAuthEvent) {
     authResponse.authEvent = authEventForWrap;
+  }
+  if (args.displayName !== undefined) {
+    authResponse.displayName = args.displayName;
+  }
+  if (args.displayNameNonString !== undefined) {
+    authResponse.displayName = args.displayNameNonString;
   }
 
   // ── Build the rumor (kind-29999) ──
@@ -400,6 +410,112 @@ describe('waitForAuthResponse — ignores invalid events', () => {
 
     await expect(promise).rejects.toThrow('timeout');
   }, 15000);
+
+  it('returns displayName when supplied in the AuthResponse', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = 'a'.repeat(64);
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    const wrap = buildAuthGiftWrap({
+      userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN, displayName: 'AxoLittle',
+    });
+    lastWs!.deliver(wrap);
+
+    const result = await promise;
+    expect(result.displayName).toBe('AxoLittle');
+  });
+
+  it('omits displayName from result when absent from AuthResponse', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = 'a'.repeat(64);
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    const wrap = buildAuthGiftWrap({ userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN });
+    lastWs!.deliver(wrap);
+
+    const result = await promise;
+    expect(result.displayName).toBeUndefined();
+    expect('displayName' in result).toBe(false);
+  });
+
+  it('strips control + bidi characters from displayName', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = 'a'.repeat(64);
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    // Embed: NUL, DEL, RTL override (U+202E), zero-width joiner (U+200D)
+    const dirty = 'Ax\x00o\x7fLi‮t‍tle';
+    const wrap = buildAuthGiftWrap({
+      userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN, displayName: dirty,
+    });
+    lastWs!.deliver(wrap);
+
+    const result = await promise;
+    expect(result.displayName).toBe('AxoLittle');
+  });
+
+  it('caps displayName at 64 characters', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = 'a'.repeat(64);
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    const long = 'A'.repeat(200);
+    const wrap = buildAuthGiftWrap({
+      userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN, displayName: long,
+    });
+    lastWs!.deliver(wrap);
+
+    const result = await promise;
+    expect(result.displayName).toBe('A'.repeat(64));
+  });
+
+  it('drops displayName that becomes empty after sanitisation', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = 'a'.repeat(64);
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    // Only control characters → cleaned to '' → dropped
+    const wrap = buildAuthGiftWrap({
+      userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN, displayName: '\x00\x01\x02',
+    });
+    lastWs!.deliver(wrap);
+
+    const result = await promise;
+    expect(result.displayName).toBeUndefined();
+  });
+
+  it('rejects non-string displayName (drops to undefined)', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = 'a'.repeat(64);
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    const wrap = buildAuthGiftWrap({
+      userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN,
+      displayNameNonString: { evil: 'object' },
+    });
+    lastWs!.deliver(wrap);
+
+    const result = await promise;
+    expect(result.displayName).toBeUndefined();
+  });
 
   it('ignores non-EVENT messages from the relay', async () => {
     const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
