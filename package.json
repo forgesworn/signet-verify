@@ -16,6 +16,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "provenance": true
+  },
   "scripts": {
     "clean": "rm -rf dist",
     "build": "npm run clean && tsc && npm run build:iife",
