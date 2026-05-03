@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0 (2026-05-03)
+
+### Features
+
+- surface displayName from AuthResponse, sanitised (#9) (auth)
+
+
+
 ## 0.2.2 (2026-05-03)
 
 ### Features
