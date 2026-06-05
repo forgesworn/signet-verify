@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 (2026-06-05)
+
+### Features
+
+- surface bunkerUri from the auth response (cross-device signer upgrade)
+
+
+
 ## 0.3.1 (2026-05-03)
 
 ### Bug Fixes
