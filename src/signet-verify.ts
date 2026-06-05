@@ -400,6 +400,13 @@ export interface SignetAuthResult {
    * — already sanitised here, but still escape on render per usual.
    */
   displayName?: string;
+  /**
+   * Optional `bunker://` URI for upgrading the auth-only session to a live signer.
+   * The signer device mints a one-shot pairing URI to its own NIP-46 server; the
+   * consumer connects to it (passthrough) to sign cross-device. Absent on
+   * auth-only flows — the consumer keeps the EphemeralSigner.
+   */
+  bunkerUri?: string;
   /** Unix timestamp the auth event was signed. */
   createdAt: number;
 }
@@ -670,11 +677,21 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
 
       const sanitisedDisplayName = sanitiseDisplayName(inner.displayName);
 
+      // Optional bunker:// URI for the auth-only → live-signer upgrade. The signer
+      // device mints a one-shot pairing URI to its own NIP-46 server; the consumer
+      // connects to it (signer passthrough) to gain signing capability cross-device.
+      // Accept only a well-formed bunker URI; anything else is ignored (stays
+      // auth-only, exactly as before this field existed).
+      const bunkerUri = (typeof inner.bunkerUri === 'string' && /^bunker:\/\//i.test(inner.bunkerUri))
+        ? inner.bunkerUri
+        : undefined;
+
       settle(() => resolve({
         pubkey: verifiedAuthEvent.pubkey,
         authEvent: verifiedAuthEvent,
         credential: inner.credential,
         ...(sanitisedDisplayName !== undefined ? { displayName: sanitisedDisplayName } : {}),
+        ...(bunkerUri !== undefined ? { bunkerUri } : {}),
         createdAt: verifiedAuthEvent.created_at,
       }));
     };
