@@ -535,3 +535,75 @@ describe('waitForAuthResponse — ignores invalid events', () => {
     expect(result.authEvent.kind).toBe(21236);
   });
 });
+
+describe('waitForAuthResponse — returning from a phone signer', () => {
+  it('keeps the request-time lookback when the socket opens after a background pause', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey, userPubkeyHex } = setupSession();
+    const requestId = '7'.repeat(64);
+    const startedAt = Date.now();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(startedAt);
+    const wrap = buildAuthGiftWrap({ userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN });
+    const promise = waitForAuthResponse({ requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN });
+    now.mockReturnValue(startedAt + 90_000);
+    await new Promise(r => setTimeout(r, 10));
+    expect(JSON.parse(lastWs!.sent[0])[2].since).toBe(Math.floor(startedAt / 1000) - 60);
+    lastWs!.deliver(wrap);
+    expect((await promise).pubkey).toBe(userPubkeyHex);
+  });
+
+  it('requests the stored response again on resume and removes its listener after success', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = '8'.repeat(64);
+    const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+    vi.stubGlobal('document', doc);
+    try {
+      const promise = waitForAuthResponse({ requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN });
+      await new Promise(r => setTimeout(r, 10));
+      doc.visibilityState = 'hidden';
+      doc.dispatchEvent(new Event('visibilitychange'));
+      expect(lastWs!.sent).toHaveLength(1);
+      doc.visibilityState = 'visible';
+      doc.dispatchEvent(new Event('visibilitychange'));
+      expect(lastWs!.sent).toEqual([lastWs!.sent[0], lastWs!.sent[0]]);
+      lastWs!.deliver(buildAuthGiftWrap({ userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN }));
+      await promise;
+      doc.dispatchEvent(new Event('visibilitychange'));
+      expect(lastWs!.sent).toHaveLength(2);
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('reports a closed connection instead of leaving the approval waiting', async () => {
+    const { sessionPrivKey } = setupSession();
+    const promise = waitForAuthResponse({ requestId: '9'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN });
+    const assertion = expect(promise).rejects.toThrow('relay-closed');
+    lastWs!.onclose?.();
+    await assertion;
+  });
+});
+
+
+describe('mobile socket recovery', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('reopens a socket closed in the background and receives the stored approval', async () => {
+    const doc = new EventTarget() as EventTarget & { visibilityState: string };
+    doc.visibilityState = 'hidden';
+    vi.stubGlobal('document', doc);
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = 'a'.repeat(64);
+    const pending = waitForAuthResponse({ requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN });
+    await new Promise(r => setTimeout(r, 10));
+    const previous = lastWs!;
+    const originalRequest = previous.sent[0];
+    previous.close(); previous.onclose?.();
+    expect(lastWs).toBe(previous);
+    doc.visibilityState = 'visible'; doc.dispatchEvent(new Event('visibilitychange'));
+    await new Promise(r => setTimeout(r, 10));
+    expect(lastWs).not.toBe(previous);
+    expect(lastWs!.sent[0]).toBe(originalRequest);
+    lastWs!.deliver(buildAuthGiftWrap({ userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN }));
+    await expect(pending).resolves.toMatchObject({ pubkey: bytesToHex(schnorr.getPublicKey(userPrivKey)) });
+    doc.dispatchEvent(new Event('visibilitychange'));
+    expect(lastWs!.readyState).toBe(3);
+  });
+});
