@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.1 (2026-09-08)
+
+### Bug Fixes
+
+- replay auth responses after mobile app switching (#39)
+
+
+
 ## 0.5.0 (2026-06-05)
 
 ### Features
