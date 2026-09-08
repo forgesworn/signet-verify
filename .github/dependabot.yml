@@ -20,6 +20,14 @@ updates:
       prefix: chore
       include: scope
     groups:
+      # @noble/curves depends on @noble/hashes and the two must cross a major
+      # together: curves v2 will not build against hashes v1. Bumped singly they
+      # each fail, which is why #36 and #37 both sat here. Majors included so
+      # the pair moves as a unit.
+      noble:
+        patterns:
+          - "@noble/*"
+        update-types: ["patch", "minor", "major"]
       production-minor:
         dependency-type: production
         update-types: ["patch", "minor"]

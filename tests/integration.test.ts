@@ -17,9 +17,9 @@ import { describe, it, expect } from 'vitest';
 import { waitForAuthResponse } from '../src/signet-verify';
 import { getConversationKey, encrypt as nip44Encrypt } from 'nostr-tools/nip44';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
-import { schnorr } from '@noble/curves/secp256k1';
-import { sha256 } from '@noble/hashes/sha256';
-import { bytesToHex } from '@noble/hashes/utils';
+import { schnorr } from '@noble/curves/secp256k1.js';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 
 const RELAY = process.env.INTEGRATION_RELAY_URL;
 const describeIf = RELAY ? describe : describe.skip;
