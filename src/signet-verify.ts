@@ -545,6 +545,9 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
   const requestIdLower = options.requestId.toLowerCase();
   const expectedOrigin = options.expectedOrigin;
 
+  // Anchor the query before Android can suspend this page while opening its signer.
+  const since = Math.floor(Date.now() / 1000) - 60;
+
   return new Promise<SignetAuthResult>((resolve, reject) => {
     const subId = `sa-${Math.random().toString(36).slice(2, 12)}`;
     let settled = false;
@@ -560,6 +563,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
       try { ws.close(); } catch { /* ignore */ }
       action();
     };
@@ -568,11 +572,18 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       settle(() => reject(new Error('timeout')));
     }, timeout);
 
-    ws.onopen = () => {
-      // Subscribe slightly in the past so a racing publish isn't missed.
-      const since = Math.floor(Date.now() / 1000) - 60;
-      ws.send(JSON.stringify(['REQ', subId, { kinds: [1059], '#p': [sessionPubkey], since }]));
+    const subscribe = () => {
+      if (!settled && ws.readyState === 1) {
+        ws.send(JSON.stringify(['REQ', subId, { kinds: [1059], '#p': [sessionPubkey], since }]));
+      }
     };
+    const onVisible = () => {
+      // Replay the stored response after switching back from a native signer.
+      // The original challenge, origin, signatures and freshness checks still apply.
+      if (document.visibilityState === 'visible') subscribe();
+    };
+    ws.onopen = subscribe;
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
 
     ws.onmessage = async (msgEvent: MessageEvent) => {
       if (settled) return;
@@ -698,6 +709,9 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
 
     ws.onerror = () => {
       settle(() => reject(new Error('relay-error')));
+    };
+    ws.onclose = () => {
+      settle(() => reject(new Error('relay-closed')));
     };
   });
 }
