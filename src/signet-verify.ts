@@ -551,20 +551,17 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
   return new Promise<SignetAuthResult>((resolve, reject) => {
     const subId = `sa-${Math.random().toString(36).slice(2, 12)}`;
     let settled = false;
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(options.relayUrl);
-    } catch {
-      reject(new Error('relay-error'));
-      return;
-    }
+    let ws: WebSocket | undefined;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = Date.now() + timeout;
 
     const settle = (action: () => void): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(retryTimer);
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
-      try { ws.close(); } catch { /* ignore */ }
+      try { ws?.close(); } catch { /* ignore */ }
       action();
     };
 
@@ -573,19 +570,21 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
     }, timeout);
 
     const subscribe = () => {
-      if (!settled && ws.readyState === 1) {
+      if (!settled && ws?.readyState === 1) {
         ws.send(JSON.stringify(['REQ', subId, { kinds: [1059], '#p': [sessionPubkey], since }]));
       }
     };
     const onVisible = () => {
       // Replay the stored response after switching back from a native signer.
       // The original challenge, origin, signatures and freshness checks still apply.
-      if (document.visibilityState === 'visible') subscribe();
+      if (settled || document.visibilityState !== 'visible') return;
+      if (Date.now() >= deadline) return settle(() => reject(new Error('timeout')));
+      if (!ws || ws.readyState >= 2) connect();
+      else subscribe();
     };
-    ws.onopen = subscribe;
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible);
 
-    ws.onmessage = async (msgEvent: MessageEvent) => {
+    const onMessage = async (msgEvent: MessageEvent) => {
       if (settled) return;
       let msg: unknown;
       try {
@@ -707,12 +706,33 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       }));
     };
 
-    ws.onerror = () => {
-      settle(() => reject(new Error('relay-error')));
+    const retryOrFail = (reason: string) => {
+      if (settled) return;
+      if (typeof document === 'undefined') return settle(() => reject(new Error(reason)));
+      clearTimeout(retryTimer);
+      // Android may close a background tab's socket. Retry on return, using
+      // the same session and original filter, within the original timeout.
+      if (document.visibilityState === 'visible') retryTimer = setTimeout(connect, 1000);
     };
-    ws.onclose = () => {
-      settle(() => reject(new Error('relay-closed')));
-    };
+    function connect() {
+      if (settled) return;
+      clearTimeout(retryTimer);
+      if (Date.now() >= deadline) return settle(() => reject(new Error('timeout')));
+      const previous = ws;
+      ws = undefined;
+      try { previous?.close(); } catch { /* already closed */ }
+      try {
+        const socket = new WebSocket(options.relayUrl);
+        ws = socket;
+        socket.onopen = subscribe;
+        socket.onmessage = onMessage;
+        socket.onerror = () => { if (ws === socket) retryOrFail('relay-error'); };
+        socket.onclose = () => { if (ws === socket) retryOrFail('relay-closed'); };
+      } catch {
+        retryOrFail('relay-error');
+      }
+    }
+    connect();
   });
 }
 

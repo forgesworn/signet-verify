@@ -580,3 +580,30 @@ describe('waitForAuthResponse — returning from a phone signer', () => {
     await assertion;
   });
 });
+
+
+describe('mobile socket recovery', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('reopens a socket closed in the background and receives the stored approval', async () => {
+    const doc = new EventTarget() as EventTarget & { visibilityState: string };
+    doc.visibilityState = 'hidden';
+    vi.stubGlobal('document', doc);
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = 'a'.repeat(64);
+    const pending = waitForAuthResponse({ requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN });
+    await new Promise(r => setTimeout(r, 10));
+    const previous = lastWs!;
+    const originalRequest = previous.sent[0];
+    previous.close(); previous.onclose?.();
+    expect(lastWs).toBe(previous);
+    doc.visibilityState = 'visible'; doc.dispatchEvent(new Event('visibilitychange'));
+    await new Promise(r => setTimeout(r, 10));
+    expect(lastWs).not.toBe(previous);
+    expect(lastWs!.sent[0]).toBe(originalRequest);
+    lastWs!.deliver(buildAuthGiftWrap({ userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN }));
+    await expect(pending).resolves.toMatchObject({ pubkey: bytesToHex(schnorr.getPublicKey(userPrivKey)) });
+    doc.dispatchEvent(new Event('visibilitychange'));
+    expect(lastWs!.readyState).toBe(3);
+  });
+});
