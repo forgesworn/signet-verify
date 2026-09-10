@@ -242,6 +242,67 @@ describe('waitForAuthResponse — happy path', () => {
   });
 });
 
+describe('waitForAuthResponse — subscription window', () => {
+  /** The `since` value from the REQ frame the waiter sent. */
+  function requestedSince(): number {
+    const req = lastWs!.sent.find(x => x.startsWith('["REQ"'))!;
+    return JSON.parse(req)[2].since as number;
+  }
+
+  it('defaults to a minute before the call', async () => {
+    const { sessionPrivKey } = setupSession();
+    const before = Math.floor(Date.now() / 1000);
+
+    const promise = waitForAuthResponse({
+      requestId: 'd'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    promise.catch(() => { /* times out; not the point of this test */ });
+    await new Promise(r => setTimeout(r, 10));
+
+    const since = requestedSince();
+    expect(since).toBeGreaterThanOrEqual(before - 61);
+    expect(since).toBeLessThanOrEqual(before - 59);
+    lastWs!.fireError();
+    await promise.catch(() => { /* settled */ });
+  });
+
+  it('asks from the caller-supplied anchor when the wait is restarted', async () => {
+    // The case this exists for: a mobile consumer whose listener was killed
+    // while the user approved in the signer app. Restarting the wait with the
+    // default window would ask only for responses newer than the restart, and
+    // the response — already published, sitting on the relay — would never be
+    // asked for again.
+    const { sessionPrivKey } = setupSession();
+    const signInStartedAt = Math.floor(Date.now() / 1000) - 240;
+
+    const promise = waitForAuthResponse({
+      requestId: 'e'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000, since: signInStartedAt - 60,
+    });
+    promise.catch(() => { /* times out; not the point of this test */ });
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(requestedSince()).toBe(signInStartedAt - 60);
+    lastWs!.fireError();
+    await promise.catch(() => { /* settled */ });
+  });
+
+  it('still accepts a response published before the restart', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey, userPubkeyHex } = setupSession();
+    const requestId = 'f'.repeat(64);
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN,
+      timeout: 5000, since: Math.floor(Date.now() / 1000) - 300,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    lastWs!.deliver(buildAuthGiftWrap({ userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN }));
+
+    const result = await promise;
+    expect(result.pubkey).toBe(userPubkeyHex);
+  });
+});
+
 describe('waitForAuthResponse — rejections', () => {
   it('rejects with denied when status is rejected', async () => {
     const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();

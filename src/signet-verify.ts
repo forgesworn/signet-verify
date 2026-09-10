@@ -371,6 +371,26 @@ export interface WaitForAuthOptions {
   expectedOrigin: string;
   /** Timeout in milliseconds. Clamped to [5_000, 600_000]. Default 120_000. */
   timeout?: number;
+  /**
+   * Unix seconds. Only responses published at or after this are asked for.
+   * Defaults to 60 seconds before this call.
+   *
+   * Pass it whenever the wait is being RESTARTED for a sign-in that was already
+   * issued — a mobile consumer resuming after the user approved in the signer
+   * app, or a retry after an attempt timed out. The default anchors the window
+   * to the restart, which silently excludes a response published while the
+   * consumer was in the background, and the response is never asked for again.
+   * Anchor it to when the sign-in URL was opened instead:
+   *
+   *   const startedAt = Math.floor(Date.now() / 1000);
+   *   // …open the auth URL, user approves in the signer app…
+   *   waitForAuthResponse({ …, since: startedAt - 60 });
+   *
+   * Staleness is bounded regardless: a response whose rumor is older than five
+   * minutes is rejected after unwrapping, and every response must carry this
+   * request's session tag and a signature over this challenge.
+   */
+  since?: number;
 }
 
 /** Full signed Kind-21236 auth event as carried in the AuthResponse. */
@@ -546,7 +566,12 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
   const expectedOrigin = options.expectedOrigin;
 
   // Anchor the query before Android can suspend this page while opening its signer.
-  const since = Math.floor(Date.now() / 1000) - 60;
+  // A caller restarting a wait for a sign-in already issued must anchor this to
+  // when that sign-in started, or the fresh window skips past a response the
+  // relay is already holding — see the `since` option.
+  const since = Number.isFinite(options.since)
+    ? Math.floor(options.since as number)
+    : Math.floor(Date.now() / 1000) - 60;
 
   return new Promise<SignetAuthResult>((resolve, reject) => {
     const subId = `sa-${Math.random().toString(36).slice(2, 12)}`;
@@ -570,6 +595,8 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
     }, timeout);
 
     const subscribe = () => {
+      // `since` comes from the enclosing scope so every (re)connection asks for
+      // the same window — see the `since` option.
       if (!settled && ws?.readyState === 1) {
         ws.send(JSON.stringify(['REQ', subId, { kinds: [1059], '#p': [sessionPubkey], since }]));
       }
