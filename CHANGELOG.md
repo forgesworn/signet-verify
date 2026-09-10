@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.2 (2026-09-10)
+
+### Bug Fixes
+
+- let a restarted wait keep its original subscription window (#41) (auth)
+
+
+
 ## 0.5.1 (2026-09-08)
 
 ### Bug Fixes
