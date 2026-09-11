@@ -821,3 +821,53 @@ describe('waitForAuthResponse — cancellation', () => {
     }))).not.toThrow();
   });
 });
+
+describe('waitForAuthResponse — default timeout', () => {
+  it('waits until the response would expire when anchored', async () => {
+    const { sessionPrivKey } = setupSession();
+    // Issued 60s ago: 240s of validity remain, well past the legacy 120s default.
+    const issuedAt = Math.floor(Date.now() / 1000) - 60;
+
+    // Fake timers must be installed BEFORE the call: waitForAuthResponse arms
+    // its internal timeout timer synchronously (no await before it), so
+    // installing fake timers afterward leaves that timer on the real clock —
+    // advancing the fake clock later would then have no effect on it.
+    vi.useFakeTimers();
+    let promise: ReturnType<typeof waitForAuthResponse>;
+    // A settlement flag, not Promise.race: racing an already-rejected promise
+    // against Promise.resolve() is itself microtask-hop-dependent — a
+    // `.then().catch()` chain takes two hops to resolve even off an
+    // already-settled input, so a bare `Promise.resolve()` branch always wins
+    // regardless of real settlement order. A single two-argument
+    // `.then(onFulfilled, onRejected)` hop avoids that.
+    let settled = false;
+    try {
+      promise = waitForAuthResponse({
+        requestId: 'b'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+        expectedOrigin: DEFAULT_ORIGIN, issuedAt,
+      });
+      promise.then(() => { settled = true; }, () => { settled = true; });
+
+      // Still waiting after the old 120s default would have given up.
+      await vi.advanceTimersByTimeAsync(130_000);
+      await Promise.resolve(); // let a just-fired rejection's handler above run
+      expect(settled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+    lastWs!.fireError();
+    await promise.catch(() => { /* settled */ });
+  });
+
+  it('honours an explicit timeout over the derived one', async () => {
+    const { sessionPrivKey } = setupSession();
+    const issuedAt = Math.floor(Date.now() / 1000);
+
+    const started = Date.now();
+    await expect(waitForAuthResponse({
+      requestId: 'c'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, issuedAt, timeout: 5000,
+    })).rejects.toThrow('timeout');
+    expect(Date.now() - started).toBeLessThan(20_000);
+  }, 30000);
+});

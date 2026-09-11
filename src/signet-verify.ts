@@ -388,7 +388,13 @@ export interface WaitForAuthOptions {
    * site from being accepted. Must be supplied verbatim (scheme + host + optional port).
    */
   expectedOrigin: string;
-  /** Timeout in milliseconds. Clamped to [5_000, 600_000]. Default 120_000. */
+  /**
+   * Timeout in milliseconds. Clamped to [5_000, 600_000].
+   *
+   * Defaults to the remaining validity of the sign-in when `issuedAt` is given
+   * — i.e. until `issuedAt + AUTH_FRESHNESS_WINDOW_SEC` — and to 120_000
+   * otherwise. Supply it only to give up EARLIER than the response would expire.
+   */
   timeout?: number;
   /**
    * Unix **seconds** when this sign-in was issued — when you minted the
@@ -597,7 +603,14 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
   }
 
   const sessionPubkey = bytesToHex(schnorr.getPublicKey(options.sessionPrivKey));
-  const timeout = Math.max(5000, Math.min(options.timeout ?? 120000, 600000));
+  // Default to "wait as long as the response could still be accepted". A flat
+  // 120s default gave up while a response was valid for another three minutes,
+  // and with a resume the caller then had nothing left to retry against. An
+  // explicit timeout still wins, for a caller that wants to give up sooner.
+  const derivedTimeoutMs = Number.isFinite(options.issuedAt)
+    ? (Math.floor(options.issuedAt as number) + AUTH_FRESHNESS_WINDOW_SEC) * 1000 - Date.now()
+    : 120000;
+  const timeout = Math.max(5000, Math.min(options.timeout ?? derivedTimeoutMs, 600000));
   const requestIdLower = options.requestId.toLowerCase();
   const expectedOrigin = options.expectedOrigin;
 
