@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 (2026-09-11)
+
+### Features
+
+- one anchor for the sign-in deadline, and tell the user about it (#42) (auth)
+
+
+
 ## 0.5.2 (2026-09-10)
 
 ### Bug Fixes
