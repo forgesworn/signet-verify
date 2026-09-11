@@ -966,3 +966,68 @@ describe('waitForAuthResponse — expiry vs timeout semantics', () => {
     })).rejects.toThrow('timeout');
   }, 15000);
 });
+
+describe('waitForAuthResponse — every rejection carries .code', () => {
+  it('sets err.code === err.message for denied', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = '4'.repeat(64);
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    lastWs!.deliver(buildAuthGiftWrap({ userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN, status: 'rejected' }));
+    await promise.catch((err: Error & { code?: string }) => {
+      expect(err.code).toBe(err.message);
+      expect(err.code).toBe('denied');
+    });
+  });
+
+  it('sets err.code === err.message for aborted', async () => {
+    const { sessionPrivKey } = setupSession();
+    const controller = new AbortController();
+    const promise = waitForAuthResponse({
+      requestId: '5'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 600000, abortSignal: controller.signal,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    controller.abort();
+    await promise.catch((err: Error & { code?: string }) => {
+      expect(err.code).toBe(err.message);
+      expect(err.code).toBe('aborted');
+    });
+  });
+
+  it('sets err.code === err.message for relay-error', async () => {
+    const { sessionPrivKey } = setupSession();
+    const promise = waitForAuthResponse({
+      requestId: '6'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 600000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    lastWs!.fireError();
+    await promise.catch((err: Error & { code?: string }) => {
+      expect(err.code).toBe(err.message);
+      expect(err.code).toBe('relay-error');
+    });
+  });
+
+  it('sets err.code === err.message for timeout', async () => {
+    const { sessionPrivKey } = setupSession();
+    const promise = waitForAuthResponse({
+      requestId: '7'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await promise.catch((err: Error & { code?: string }) => {
+      expect(err.code).toBe(err.message);
+      expect(err.code).toBe('timeout');
+    });
+  }, 15000);
+
+  it('sets err.code === err.message for an invalid-* input throw', async () => {
+    const { sessionPrivKey } = setupSession();
+    await waitForAuthResponse({
+      requestId: 'not-hex', relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN,
+    }).catch((err: Error & { code?: string }) => {
+      expect(err.code).toBe(err.message);
+      expect(err.code).toBe('invalid-request-id');
+    });
+  });
+});

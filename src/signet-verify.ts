@@ -586,29 +586,41 @@ function sanitiseDisplayName(raw: unknown): string | undefined {
  * the Signet app publishes a NIP-17 gift-wrapped response to the relay and this
  * function resolves with the verified auth result.
  *
- * Rejects with `Error(message)` where message is one of:
+ * Rejects with `Error(message)` where `message` (and `.code`) is one of:
  *   - `'denied'` — user rejected the request
  *   - `'timeout'` — no valid response within the timeout
  *   - `'expired'` — a structurally valid response arrived outside the freshness window
  *   - `'aborted'` — the caller's `abortSignal` fired (or was already aborted)
  *   - `'relay-error'` — WebSocket connection failure
- *   - `'invalid-request-id'` / `'invalid-session-privkey'` / `'invalid-relay-url'` / `'invalid-issued-at'` — bad input
+ *   - `'relay-closed'` — WebSocket connection closed
+ *   - `'invalid-request-id'` / `'invalid-session-privkey'` / `'invalid-relay-url'` / `'invalid-expected-origin'` / `'invalid-issued-at'` — bad input
  */
 export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<SignetAuthResult> {
+  type WaitForAuthErrorCode =
+    | 'invalid-request-id' | 'invalid-session-privkey' | 'invalid-relay-url'
+    | 'invalid-expected-origin' | 'invalid-issued-at'
+    | 'denied' | 'timeout' | 'expired' | 'aborted' | 'relay-error' | 'relay-closed';
+
+  const authError = (code: WaitForAuthErrorCode): Error => {
+    const err = new Error(code) as Error & { code: WaitForAuthErrorCode };
+    err.code = code;
+    return err;
+  };
+
   if (!/^[0-9a-f]{64}$/i.test(options.requestId)) {
-    throw new Error('invalid-request-id');
+    throw authError('invalid-request-id');
   }
   if (!(options.sessionPrivKey instanceof Uint8Array) || options.sessionPrivKey.length !== 32) {
-    throw new Error('invalid-session-privkey');
+    throw authError('invalid-session-privkey');
   }
   if (!/^wss:\/\//i.test(options.relayUrl) && !/^ws:\/\/(localhost|127\.0\.0\.1)([:\/]|$)/i.test(options.relayUrl)) {
-    throw new Error('invalid-relay-url');
+    throw authError('invalid-relay-url');
   }
   if (typeof options.expectedOrigin !== 'string' || options.expectedOrigin.length === 0) {
-    throw new Error('invalid-expected-origin');
+    throw authError('invalid-expected-origin');
   }
   if (Number.isFinite(options.issuedAt) && (options.issuedAt as number) > Math.floor(Date.now() / 1000) + AUTH_FRESHNESS_WINDOW_SEC) {
-    throw new Error('invalid-issued-at');
+    throw authError('invalid-issued-at');
   }
 
   const sessionPubkey = bytesToHex(schnorr.getPublicKey(options.sessionPrivKey));
@@ -631,12 +643,6 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
     : Number.isFinite(options.issuedAt)
       ? Math.floor(options.issuedAt as number) - ANCHOR_SKEW_SEC
       : Math.floor(Date.now() / 1000) - ANCHOR_SKEW_SEC;
-
-  const authError = (code: 'timeout' | 'expired'): Error => {
-    const err = new Error(code) as Error & { code: string };
-    err.code = code;
-    return err;
-  };
 
   // True once the sign-in's own validity window has elapsed — distinct from
   // `sawExpired`, which only fires when a STALE response was actually seen.
@@ -716,7 +722,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
 
       const statusTag = rumor.tags.find(t => t[0] === 'status');
       if (statusTag?.[1] === 'rejected') {
-        settle(() => reject(new Error('denied')));
+        settle(() => reject(authError('denied')));
         return;
       }
       if (statusTag?.[1] !== 'approved') return;
@@ -821,9 +827,9 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       }));
     };
 
-    const retryOrFail = (reason: string) => {
+    const retryOrFail = (reason: 'relay-error' | 'relay-closed') => {
       if (settled) return;
-      if (typeof document === 'undefined') return settle(() => reject(new Error(reason)));
+      if (typeof document === 'undefined') return settle(() => reject(authError(reason)));
       clearTimeout(retryTimer);
       // Android may close a background tab's socket. Retry on return, using
       // the same session and original filter, within the original timeout.
@@ -832,7 +838,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
     function connect() {
       if (settled) return;
       clearTimeout(retryTimer);
-      if (Date.now() >= deadline) return settle(() => reject(new Error('timeout')));
+      if (Date.now() >= deadline) return settle(() => reject(authError('timeout')));
       const previous = ws;
       ws = undefined;
       try { previous?.close(); } catch { /* already closed */ }
@@ -852,10 +858,10 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
     // settle() reaches back into onVisible via document.removeEventListener,
     // so settling any earlier (including this already-aborted short-circuit)
     // would reference onVisible before its `const` declaration had run.
-    const onAbort = () => settle(() => reject(new Error('aborted')));
+    const onAbort = () => settle(() => reject(authError('aborted')));
     if (options.abortSignal?.aborted) {
       // Nothing to tear down yet — settle before a socket is ever opened.
-      settle(() => reject(new Error('aborted')));
+      settle(() => reject(authError('aborted')));
       return;
     }
     options.abortSignal?.addEventListener('abort', onAbort, { once: true });
