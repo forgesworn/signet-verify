@@ -585,6 +585,8 @@ function sanitiseDisplayName(raw: unknown): string | undefined {
  * Rejects with `Error(message)` where message is one of:
  *   - `'denied'` — user rejected the request
  *   - `'timeout'` — no valid response within the timeout
+ *   - `'expired'` — a structurally valid response arrived outside the freshness window
+ *   - `'aborted'` — the caller's `abortSignal` fired (or was already aborted)
  *   - `'relay-error'` — WebSocket connection failure
  *   - `'invalid-request-id'` / `'invalid-session-privkey'` / `'invalid-relay-url'` — bad input
  */
@@ -655,14 +657,6 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
     const timer = setTimeout(() => {
       settle(() => reject(authError(sawExpired ? 'expired' : 'timeout')));
     }, timeout);
-
-    const onAbort = () => settle(() => reject(new Error('aborted')));
-    if (options.abortSignal?.aborted) {
-      // Nothing to tear down yet — settle before a socket is ever opened.
-      settle(() => reject(new Error('aborted')));
-      return;
-    }
-    options.abortSignal?.addEventListener('abort', onAbort, { once: true });
 
     const subscribe = () => {
       // `since` comes from the enclosing scope so every (re)connection asks for
@@ -835,6 +829,19 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
         retryOrFail('relay-error');
       }
     }
+
+    // Checked here — after onVisible exists — rather than up near `timer`:
+    // settle() reaches back into onVisible via document.removeEventListener,
+    // so settling any earlier (including this already-aborted short-circuit)
+    // would reference onVisible before its `const` declaration had run.
+    const onAbort = () => settle(() => reject(new Error('aborted')));
+    if (options.abortSignal?.aborted) {
+      // Nothing to tear down yet — settle before a socket is ever opened.
+      settle(() => reject(new Error('aborted')));
+      return;
+    }
+    options.abortSignal?.addEventListener('abort', onAbort, { once: true });
+
     connect();
   });
 }

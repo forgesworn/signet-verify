@@ -820,6 +820,31 @@ describe('waitForAuthResponse — cancellation', () => {
       userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN,
     }))).not.toThrow();
   });
+
+  it('rejects with aborted, not a ReferenceError, when document exists and the signal is already aborted', async () => {
+    const { sessionPrivKey } = setupSession();
+    const controller = new AbortController();
+    controller.abort();
+
+    // Reproduces a real browser environment for this one test: this repo's
+    // suite otherwise runs with no `document` at all, which hid a TDZ bug
+    // where `settle()` referenced `onVisible` before its `const` declaration
+    // had run, on this exact (already-aborted) path.
+    const fakeDocument = {
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      visibilityState: 'visible',
+    };
+    (globalThis as unknown as { document: unknown }).document = fakeDocument;
+    try {
+      await expect(waitForAuthResponse({
+        requestId: 'e'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+        expectedOrigin: DEFAULT_ORIGIN, timeout: 600000, abortSignal: controller.signal,
+      })).rejects.toThrow('aborted');
+    } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  });
 });
 
 describe('waitForAuthResponse — default timeout', () => {
