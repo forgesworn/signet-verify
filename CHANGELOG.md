@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 (2026-09-11)
+
+### Features
+
+- default to the Signet relay and export it as DEFAULT_RELAY_URL (#44) (verify)
+
+
+
 ## 0.6.1 (2026-09-11)
 
 ### Bug Fixes
