@@ -59,19 +59,25 @@ device, and waiting on a relay for the response published from the user's
 phone — use `waitForAuthResponse` directly:
 
 ```ts
-import { waitForAuthResponse, AUTH_FRESHNESS_WINDOW_SEC } from 'signet-verify';
+import { waitForAuthResponse } from 'signet-verify';
+
+// Stamp this ONCE, when you mint the challenge and open the auth URL / show the QR.
+const issuedAt = Math.floor(Date.now() / 1000);
 
 const result = await waitForAuthResponse({
   requestId,        // the challenge you put in the auth URL / QR
   relayUrl,
   sessionPrivKey,    // your ephemeral session keypair's private key
   expectedOrigin: location.origin,
+  issuedAt,          // ← pass on EVERY call for this sign-in, including retries
 });
 ```
 
 ### The sign-in deadline
 
-A cross-device sign-in has exactly one deadline, and you should show it to the user.
+A cross-device sign-in has exactly one deadline: `issuedAt + AUTH_FRESHNESS_WINDOW_SEC`.
+Past that point, this library stops listening and reports `expired` — show a countdown
+to it.
 
 ```ts
 import { waitForAuthResponse, AUTH_FRESHNESS_WINDOW_SEC } from 'signet-verify';
@@ -100,13 +106,14 @@ again. This was a real, 100%-reproducible failure before 0.5.2.
 
 | Code | Meaning | What to offer |
 |---|---|---|
-| `expired` | A valid response arrived, but outside the window — the user was too late | A fresh sign-in |
-| `timeout` | Nothing arrived | A retry, anchored to the same `issuedAt` |
+| `expired` | This sign-in is over — its validity window ran out, or a response arrived too late | A fresh sign-in (new challenge, new `issuedAt`) |
+| `timeout` | The wait gave up early — an explicit shorter `timeout`, or no `issuedAt` was supplied at all | A retry, anchored to the same `issuedAt` |
 | `denied` | The user rejected the request | Nothing; respect it |
 | `aborted` | You aborted via `abortSignal` | Nothing |
 | `relay-error` | The socket failed | A retry, anchored to the same `issuedAt` |
+| `invalid-issued-at` | `issuedAt` looks like the wrong unit (e.g. milliseconds) or is too far in the future | A bug in your code, not a retry — check you're passing unix **seconds** |
 
-`err.code` is also set, but today only for `expired` and `timeout` — the other three are message-only.
+The code is on both `err.message` and `err.code` — branch on either.
 
 **`since` is an escape hatch.** It sets the relay query anchor directly and takes
 precedence over `issuedAt`. Prefer `issuedAt`, which derives it correctly.
