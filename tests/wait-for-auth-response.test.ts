@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { waitForAuthResponse } from '../src/signet-verify';
+import { waitForAuthResponse, AUTH_FRESHNESS_WINDOW_SEC } from '../src/signet-verify';
 import { getConversationKey, encrypt as nip44Encrypt } from 'nostr-tools/nip44';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
 import { schnorr } from '@noble/curves/secp256k1.js';
@@ -300,6 +300,57 @@ describe('waitForAuthResponse — subscription window', () => {
 
     const result = await promise;
     expect(result.pubkey).toBe(userPubkeyHex);
+  });
+
+  it('derives the relay window from issuedAt', async () => {
+    const { sessionPrivKey } = setupSession();
+    const issuedAt = Math.floor(Date.now() / 1000) - 240;
+
+    const promise = waitForAuthResponse({
+      requestId: '1'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000, issuedAt,
+    });
+    promise.catch(() => { /* times out; not the point of this test */ });
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(requestedSince()).toBe(issuedAt - 60);
+    lastWs!.fireError();
+    await promise.catch(() => { /* settled */ });
+  });
+
+  it('lets an explicit since override issuedAt', async () => {
+    // `since` is the raw escape hatch and stays authoritative for consumers
+    // already passing it against 0.5.2.
+    const { sessionPrivKey } = setupSession();
+    const issuedAt = Math.floor(Date.now() / 1000) - 240;
+
+    const promise = waitForAuthResponse({
+      requestId: '2'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000, issuedAt, since: 1700000000,
+    });
+    promise.catch(() => { /* times out; not the point of this test */ });
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(requestedSince()).toBe(1700000000);
+    lastWs!.fireError();
+    await promise.catch(() => { /* settled */ });
+  });
+
+  it('ignores a non-finite issuedAt and falls back to the default window', async () => {
+    const { sessionPrivKey } = setupSession();
+    const before = Math.floor(Date.now() / 1000);
+
+    const promise = waitForAuthResponse({
+      requestId: '3'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000, issuedAt: Number.NaN,
+    });
+    promise.catch(() => { /* times out; not the point of this test */ });
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(requestedSince()).toBeGreaterThanOrEqual(before - 61);
+    expect(requestedSince()).toBeLessThanOrEqual(before - 59);
+    lastWs!.fireError();
+    await promise.catch(() => { /* settled */ });
   });
 });
 
@@ -666,5 +717,11 @@ describe('mobile socket recovery', () => {
     await expect(pending).resolves.toMatchObject({ pubkey: bytesToHex(schnorr.getPublicKey(userPrivKey)) });
     doc.dispatchEvent(new Event('visibilitychange'));
     expect(lastWs!.readyState).toBe(3);
+  });
+});
+
+describe('AUTH_FRESHNESS_WINDOW_SEC', () => {
+  it('is the five-minute window the freshness checks enforce', () => {
+    expect(AUTH_FRESHNESS_WINDOW_SEC).toBe(300);
   });
 });

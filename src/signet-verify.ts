@@ -355,6 +355,25 @@ export async function verifyAge(requiredAgeRange: string, options?: Partial<Sign
 
 // ── Cross-device auth response subscription ──────────────────────────────────
 
+/**
+ * Seconds either side of now within which an auth response is accepted.
+ *
+ * This is the ONLY real deadline in the sign-in flow: a response whose rumor or
+ * auth event is older (or newer) than this is dropped. Exported so a consumer
+ * can build an honest countdown — `expiresAt = issuedAt + AUTH_FRESHNESS_WINDOW_SEC`
+ * — instead of hardcoding 300 and drifting from this library.
+ */
+export const AUTH_FRESHNESS_WINDOW_SEC = 300;
+
+/**
+ * Slack subtracted from `issuedAt` when deriving the relay query window, to
+ * absorb clock skew between the consumer and the signer device. Widening the
+ * query loosens nothing: every response must still unwrap under this session
+ * key, carry this request's session tag, carry a signature over this challenge,
+ * match the expected origin, and pass the freshness check above.
+ */
+const ANCHOR_SKEW_SEC = 60;
+
 /** Options for waiting on a cross-device Sign-in-with-Signet response. */
 export interface WaitForAuthOptions {
   /** The challenge (also the `requestId`) sent in the auth URL. 64-char hex. */
@@ -372,23 +391,32 @@ export interface WaitForAuthOptions {
   /** Timeout in milliseconds. Clamped to [5_000, 600_000]. Default 120_000. */
   timeout?: number;
   /**
-   * Unix seconds. Only responses published at or after this are asked for.
-   * Defaults to 60 seconds before this call.
+   * Unix **seconds** when this sign-in was issued — when you minted the
+   * challenge and opened the auth URL or rendered the QR. This is the anchor
+   * everything else derives from; pass it on EVERY call for a given sign-in,
+   * including retries and resumes.
    *
-   * Pass it whenever the wait is being RESTARTED for a sign-in that was already
-   * issued — a mobile consumer resuming after the user approved in the signer
-   * app, or a retry after an attempt timed out. The default anchors the window
-   * to the restart, which silently excludes a response published while the
-   * consumer was in the background, and the response is never asked for again.
-   * Anchor it to when the sign-in URL was opened instead:
+   * Why it matters: the relay query window is computed from this. If a wait is
+   * restarted — a mobile consumer resuming after the user approved in the signer
+   * app, or a retry after a timeout — a window anchored to the restart silently
+   * excludes the response published while the consumer was in the background,
+   * and that response is never asked for again. Anchoring to issuance fixes it:
    *
-   *   const startedAt = Math.floor(Date.now() / 1000);
-   *   // …open the auth URL, user approves in the signer app…
-   *   waitForAuthResponse({ …, since: startedAt - 60 });
+   *   const issuedAt = Math.floor(Date.now() / 1000);
+   *   // …open the auth URL, user approves in the signer app, page may be suspended…
+   *   waitForAuthResponse({ …, issuedAt });
    *
-   * Staleness is bounded regardless: a response whose rumor is older than five
-   * minutes is rejected after unwrapping, and every response must carry this
-   * request's session tag and a signature over this challenge.
+   * The deadline the user is actually racing is
+   * `issuedAt + AUTH_FRESHNESS_WINDOW_SEC`. Show it to them.
+   */
+  issuedAt?: number;
+  /**
+   * Raw relay query anchor in unix seconds — the low-level escape hatch.
+   *
+   * Prefer `issuedAt`, which derives this correctly. `since` is honoured for
+   * consumers written against 0.5.2 and takes precedence over `issuedAt` when
+   * both are supplied. Defaults to 60 seconds before this call when neither is
+   * given.
    */
   since?: number;
 }
@@ -565,13 +593,14 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
   const requestIdLower = options.requestId.toLowerCase();
   const expectedOrigin = options.expectedOrigin;
 
-  // Anchor the query before Android can suspend this page while opening its signer.
-  // A caller restarting a wait for a sign-in already issued must anchor this to
-  // when that sign-in started, or the fresh window skips past a response the
-  // relay is already holding — see the `since` option.
+  // One anchor, derived once at call entry — never inside ws.onopen, or a
+  // reconnect after a background pause re-anchors past the response. Precedence:
+  // explicit `since` (escape hatch) > derived from `issuedAt` > legacy default.
   const since = Number.isFinite(options.since)
     ? Math.floor(options.since as number)
-    : Math.floor(Date.now() / 1000) - 60;
+    : Number.isFinite(options.issuedAt)
+      ? Math.floor(options.issuedAt as number) - ANCHOR_SKEW_SEC
+      : Math.floor(Date.now() / 1000) - ANCHOR_SKEW_SEC;
 
   return new Promise<SignetAuthResult>((resolve, reject) => {
     const subId = `sa-${Math.random().toString(36).slice(2, 12)}`;
@@ -641,7 +670,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
 
       // Freshness check — protects against stale replays the relay might serve.
       const ageSec = Math.abs(Date.now() / 1000 - rumor.created_at);
-      if (ageSec > 300) return;
+      if (ageSec > AUTH_FRESHNESS_WINDOW_SEC) return;
 
       let inner: Record<string, unknown> | null;
       try {
@@ -700,7 +729,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
 
       // Freshness check on the auth event itself (the user's signature timestamp)
       const authEventAgeSec = Math.abs(Date.now() / 1000 - (ae.created_at as number));
-      if (authEventAgeSec > 300) return;
+      if (authEventAgeSec > AUTH_FRESHNESS_WINDOW_SEC) return;
 
       const verifiedAuthEvent: SignetAuthEvent = {
         id: (ae.id as string).toLowerCase(),
