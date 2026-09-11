@@ -777,6 +777,35 @@ describe('waitForAuthResponse — returning from a phone signer', () => {
 describe('mobile socket recovery', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
+  it('reports expired, not timeout, when the socket is reopened after the sign-in ran out', async () => {
+    // The headline mobile case: Android closes the socket while the user is in
+    // the signer app, and they come back after the window has passed. The retry
+    // reaches connect() past the deadline — which must say the sign-in is over,
+    // not invite a retry against an anchor that has already expired.
+    vi.useFakeTimers();
+    try {
+      const doc = new EventTarget() as EventTarget & { visibilityState: string };
+      doc.visibilityState = 'visible';
+      vi.stubGlobal('document', doc);
+      const { sessionPrivKey } = setupSession();
+      const pending = waitForAuthResponse({
+        requestId: 'b'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+        expectedOrigin: DEFAULT_ORIGIN, issuedAt: Math.floor(Date.now() / 1000),
+      });
+      const assertion = expect(pending).rejects.toThrow('expired');
+      await vi.advanceTimersByTimeAsync(1); // mock socket opens
+      // Move the wall clock past the whole validity window WITHOUT firing the
+      // wait's own timer (setSystemTime shifts pending timers with it), so the
+      // reconnect is the path that observes the deadline.
+      vi.setSystemTime(Date.now() + (AUTH_FRESHNESS_WINDOW_SEC + 30) * 1000);
+      lastWs!.onclose?.(); // visible → schedules connect() in 1 s
+      await vi.advanceTimersByTimeAsync(1000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reopens a socket closed in the background and receives the stored approval', async () => {
     const doc = new EventTarget() as EventTarget & { visibilityState: string };
     doc.visibilityState = 'hidden';

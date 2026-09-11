@@ -678,8 +678,15 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       action();
     };
 
-    const timer = setTimeout(() => {
+    // Every give-up says the same thing: `expired` if this sign-in is over,
+    // `timeout` if the wait stopped early. One helper, because there are three
+    // give-up paths — the timer, a resume, and a reconnect — and a copy that
+    // drifted once already reported `timeout` on the mobile reconnect path.
+    const giveUp = (): void =>
       settle(() => reject(authError(sawExpired || pastValidity() ? 'expired' : 'timeout')));
+
+    const timer = setTimeout(() => {
+      giveUp();
     }, timeout);
 
     const subscribe = () => {
@@ -693,7 +700,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       // Replay the stored response after switching back from a native signer.
       // The original challenge, origin, signatures and freshness checks still apply.
       if (settled || document.visibilityState !== 'visible') return;
-      if (Date.now() >= deadline) return settle(() => reject(authError(sawExpired || pastValidity() ? 'expired' : 'timeout')));
+      if (Date.now() >= deadline) return giveUp();
       if (!ws || ws.readyState >= 2) connect();
       else subscribe();
     };
@@ -838,7 +845,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
     function connect() {
       if (settled) return;
       clearTimeout(retryTimer);
-      if (Date.now() >= deadline) return settle(() => reject(authError('timeout')));
+      if (Date.now() >= deadline) return giveUp();
       const previous = ws;
       ws = undefined;
       try { previous?.close(); } catch { /* already closed */ }
