@@ -80,7 +80,7 @@ Past that point, this library stops listening and reports `expired` — show a c
 to it.
 
 ```ts
-import { waitForAuthResponse, AUTH_FRESHNESS_WINDOW_SEC } from 'signet-verify';
+import { waitForAuthResponse, AUTH_FRESHNESS_WINDOW_SEC, DEFAULT_RELAY_URL } from 'signet-verify';
 
 // Stamp this ONCE, when you mint the challenge and open the auth URL / show the QR.
 const issuedAt = Math.floor(Date.now() / 1000);
@@ -88,7 +88,7 @@ const expiresAt = issuedAt + AUTH_FRESHNESS_WINDOW_SEC; // show a countdown to t
 
 const result = await waitForAuthResponse({
   requestId: challenge,
-  relayUrl,
+  relayUrl: DEFAULT_RELAY_URL, // the Signet relay — must match the relay= in your auth URL
   sessionPrivKey,
   expectedOrigin: location.origin,
   issuedAt,          // ← pass on EVERY call for this sign-in, retries included
@@ -129,7 +129,7 @@ Returns `Promise<SignetVerifyResult>`
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `relayUrl` | `string` | `wss://relay.damus.io` | Relay URL for cross-device communication |
+| `relayUrl` | `string` | `DEFAULT_RELAY_URL` (`wss://relay.trotters.cc`) | Relay URL for cross-device communication. Must serve kind-1059 gift wraps to an unauthenticated reader |
 | `theme` | `'light' \| 'dark' \| 'auto'` | `'auto'` | Modal colour scheme |
 | `timeout` | `number` | `120000` | Timeout in milliseconds |
 | `verifierCheckUrl` | `string \| null` | `'https://verify.signet.forgesworn.dev'` | Verification bot URL. Set to `null` to skip. |

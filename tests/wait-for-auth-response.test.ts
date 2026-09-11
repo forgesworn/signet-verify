@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { waitForAuthResponse, AUTH_FRESHNESS_WINDOW_SEC } from '../src/signet-verify';
+import { waitForAuthResponse, AUTH_FRESHNESS_WINDOW_SEC, DEFAULT_RELAY_URL } from '../src/signet-verify';
 import { getConversationKey, encrypt as nip44Encrypt } from 'nostr-tools/nip44';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
 import { schnorr } from '@noble/curves/secp256k1.js';
@@ -1111,5 +1111,15 @@ describe('waitForAuthResponse — the relay refuses the subscription', () => {
     lastWs!.deliver(buildAuthGiftWrap({ userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN }));
 
     expect((await promise).pubkey).toBe(userPubkeyHex);
+  });
+});
+
+describe('DEFAULT_RELAY_URL', () => {
+  it('is the Signet relay — the one we operate, and one that serves gift wraps', () => {
+    // relay.damus.io was verifyAge's default. It accepts a gift wrap, then
+    // refuses kind-1059 reads to an unauthenticated client with its AUTH
+    // misconfigured, so no client can fetch one. relay.trotters.cc is the relay
+    // the Signet app itself publishes to.
+    expect(DEFAULT_RELAY_URL).toBe('wss://relay.trotters.cc');
   });
 });
