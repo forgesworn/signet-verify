@@ -569,11 +569,17 @@ async function unwrapGiftWrap(
 // consumer_display_name sanitiser, kept consistent so wire→consumer and
 // consumer→wire treat the field identically.
 function sanitiseDisplayName(raw: unknown): string | undefined {
+  return sanitiseDisplayText(raw, 64);
+}
+
+// Shared by anything outside-controlled that a caller may render: the persona
+// handle above, and a relay's reason for refusing a subscription.
+function sanitiseDisplayText(raw: unknown, max: number): string | undefined {
   if (typeof raw !== 'string') return undefined;
   const cleaned = raw
     .replace(/[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069]/g, '')
     .trim()
-    .slice(0, 64);
+    .slice(0, max);
   return cleaned.length > 0 ? cleaned : undefined;
 }
 
@@ -593,13 +599,14 @@ function sanitiseDisplayName(raw: unknown): string | undefined {
  *   - `'aborted'` — the caller's `abortSignal` fired (or was already aborted)
  *   - `'relay-error'` — WebSocket connection failure
  *   - `'relay-closed'` — WebSocket connection closed
+ *   - `'relay-refused'` — the relay CLOSED the subscription (e.g. it demands AUTH); `err.reason` carries its sanitised text
  *   - `'invalid-request-id'` / `'invalid-session-privkey'` / `'invalid-relay-url'` / `'invalid-expected-origin'` / `'invalid-issued-at'` — bad input
  */
 export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<SignetAuthResult> {
   type WaitForAuthErrorCode =
     | 'invalid-request-id' | 'invalid-session-privkey' | 'invalid-relay-url'
     | 'invalid-expected-origin' | 'invalid-issued-at'
-    | 'denied' | 'timeout' | 'expired' | 'aborted' | 'relay-error' | 'relay-closed';
+    | 'denied' | 'timeout' | 'expired' | 'aborted' | 'relay-error' | 'relay-closed' | 'relay-refused';
 
   const authError = (code: WaitForAuthErrorCode): Error => {
     const err = new Error(code) as Error & { code: WaitForAuthErrorCode };
@@ -715,6 +722,20 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
         return;
       }
       if (!Array.isArray(msg)) return;
+      if (msg[0] === 'CLOSED' && msg[1] === subId) {
+        // The relay refused this subscription outright — relay.damus.io closes
+        // kind-1059 #p reads with "auth-required". Retrying the same filter here
+        // gets the same answer, so say so now instead of waiting silently to
+        // expiry while the approval sits on the relay. `reason` is the relay's
+        // own text, sanitised because callers may display it.
+        const reason = sanitiseDisplayText(msg[2], 200);
+        settle(() => {
+          const err = authError('relay-refused') as Error & { reason?: string };
+          if (reason) err.reason = reason;
+          reject(err);
+        });
+        return;
+      }
       if (msg[0] !== 'EVENT' || msg[1] !== subId) return;
       const wrap = msg[2];
       if (typeof wrap !== 'object' || wrap === null) return;
