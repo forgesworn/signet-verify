@@ -1060,3 +1060,56 @@ describe('waitForAuthResponse — every rejection carries .code', () => {
     });
   });
 });
+
+describe('waitForAuthResponse — the relay refuses the subscription', () => {
+  it('rejects with relay-refused and the relay\'s reason instead of waiting silently', async () => {
+    // Seen live on relay.damus.io: it accepts the gift wrap, then CLOSEDs any
+    // kind-1059 #p subscription with "auth-required". The CLOSED used to be
+    // ignored, so the wait ran silently to expiry while the approval sat on the
+    // relay. Retrying the same filter on the same relay gets the same answer,
+    // so this settles at once.
+    const { sessionPrivKey } = setupSession();
+    const promise = waitForAuthResponse({
+      requestId: 'c'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 600000,
+    });
+    const settledErr = promise.catch((err: Error & { code?: string; reason?: string }) => err);
+    await new Promise(r => setTimeout(r, 10));
+    const subId = JSON.parse(lastWs!.sent[0])[1];
+    lastWs!.deliverRaw(['CLOSED', subId, 'auth-required: requested filter requires authentication']);
+
+    const err = await settledErr as Error & { code?: string; reason?: string };
+    expect(err.message).toBe('relay-refused');
+    expect(err.code).toBe('relay-refused');
+    expect(err.reason).toBe('auth-required: requested filter requires authentication');
+  });
+
+  it('sanitises the relay\'s reason before handing it to a caller that may display it', async () => {
+    const { sessionPrivKey } = setupSession();
+    const promise = waitForAuthResponse({
+      requestId: 'c'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 600000,
+    });
+    const settledErr = promise.catch((err: Error & { reason?: string }) => err);
+    await new Promise(r => setTimeout(r, 10));
+    const subId = JSON.parse(lastWs!.sent[0])[1];
+    lastWs!.deliverRaw(['CLOSED', subId, 'bad‮ ' + 'x'.repeat(500)]);
+
+    const err = await settledErr as Error & { reason?: string };
+    expect(err.reason).not.toContain('‮');
+    expect(err.reason!.length).toBeLessThanOrEqual(200);
+  });
+
+  it('ignores a CLOSED for some other subscription', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey, userPubkeyHex } = setupSession();
+    const requestId = 'd'.repeat(64);
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 600000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    lastWs!.deliverRaw(['CLOSED', 'not-ours', 'whatever']);
+    lastWs!.deliver(buildAuthGiftWrap({ userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN }));
+
+    expect((await promise).pubkey).toBe(userPubkeyHex);
+  });
+});
