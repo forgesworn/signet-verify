@@ -773,3 +773,51 @@ describe('AUTH_FRESHNESS_WINDOW_SEC', () => {
     expect(AUTH_FRESHNESS_WINDOW_SEC).toBe(300);
   });
 });
+
+describe('waitForAuthResponse — cancellation', () => {
+  it('rejects with aborted and closes the socket when the signal fires', async () => {
+    const { sessionPrivKey } = setupSession();
+    const controller = new AbortController();
+
+    const promise = waitForAuthResponse({
+      requestId: '7'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 600000, abortSignal: controller.signal,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    controller.abort();
+
+    await expect(promise).rejects.toThrow('aborted');
+    expect(lastWs!.readyState).toBe(3);
+  });
+
+  it('rejects immediately when handed an already-aborted signal', async () => {
+    const { sessionPrivKey } = setupSession();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(waitForAuthResponse({
+      requestId: '8'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 600000, abortSignal: controller.signal,
+    })).rejects.toThrow('aborted');
+  });
+
+  it('ignores a response delivered after an abort', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = '9'.repeat(64);
+    const controller = new AbortController();
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN,
+      timeout: 600000, abortSignal: controller.signal,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    const ws = lastWs!;
+    controller.abort();
+    await expect(promise).rejects.toThrow('aborted');
+
+    // Late delivery must not resolve an already-settled promise.
+    expect(() => ws.deliver(buildAuthGiftWrap({
+      userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN,
+    }))).not.toThrow();
+  });
+});

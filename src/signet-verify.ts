@@ -419,6 +419,14 @@ export interface WaitForAuthOptions {
    * given.
    */
   since?: number;
+  /**
+   * Aborts the wait and closes its relay subscription.
+   *
+   * Without this a cancelled attempt — the user tapped Back, or a second attempt
+   * started — kept its subscription open until the internal timeout elapsed.
+   * Rejects with `aborted`.
+   */
+  abortSignal?: AbortSignal;
 }
 
 /** Full signed Kind-21236 auth event as carried in the AuthResponse. */
@@ -626,6 +634,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       clearTimeout(timer);
       clearTimeout(retryTimer);
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      options.abortSignal?.removeEventListener('abort', onAbort);
       try { ws?.close(); } catch { /* ignore */ }
       action();
     };
@@ -633,6 +642,14 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
     const timer = setTimeout(() => {
       settle(() => reject(authError(sawExpired ? 'expired' : 'timeout')));
     }, timeout);
+
+    const onAbort = () => settle(() => reject(new Error('aborted')));
+    if (options.abortSignal?.aborted) {
+      // Nothing to tear down yet — settle before a socket is ever opened.
+      settle(() => reject(new Error('aborted')));
+      return;
+    }
+    options.abortSignal?.addEventListener('abort', onAbort, { once: true });
 
     const subscribe = () => {
       // `since` comes from the enclosing scope so every (re)connection asks for
