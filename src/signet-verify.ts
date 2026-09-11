@@ -397,7 +397,11 @@ export interface WaitForAuthOptions {
    */
   timeout?: number;
   /**
-   * Unix **seconds** when this sign-in was issued — when you minted the
+   * Unix **SECONDS**, not milliseconds — `Math.floor(Date.now() / 1000)`. A
+   * value more than `AUTH_FRESHNESS_WINDOW_SEC` seconds in the future throws
+   * `invalid-issued-at`.
+   *
+   * The moment this sign-in was issued — when you minted the
    * challenge and opened the auth URL or rendered the QR. This is the anchor
    * everything else derives from; pass it on EVERY call for a given sign-in,
    * including retries and resumes.
@@ -588,7 +592,7 @@ function sanitiseDisplayName(raw: unknown): string | undefined {
  *   - `'expired'` — a structurally valid response arrived outside the freshness window
  *   - `'aborted'` — the caller's `abortSignal` fired (or was already aborted)
  *   - `'relay-error'` — WebSocket connection failure
- *   - `'invalid-request-id'` / `'invalid-session-privkey'` / `'invalid-relay-url'` — bad input
+ *   - `'invalid-request-id'` / `'invalid-session-privkey'` / `'invalid-relay-url'` / `'invalid-issued-at'` — bad input
  */
 export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<SignetAuthResult> {
   if (!/^[0-9a-f]{64}$/i.test(options.requestId)) {
@@ -602,6 +606,9 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
   }
   if (typeof options.expectedOrigin !== 'string' || options.expectedOrigin.length === 0) {
     throw new Error('invalid-expected-origin');
+  }
+  if (Number.isFinite(options.issuedAt) && (options.issuedAt as number) > Math.floor(Date.now() / 1000) + AUTH_FRESHNESS_WINDOW_SEC) {
+    throw new Error('invalid-issued-at');
   }
 
   const sessionPubkey = bytesToHex(schnorr.getPublicKey(options.sessionPrivKey));

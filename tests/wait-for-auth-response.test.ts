@@ -216,6 +216,38 @@ describe('waitForAuthResponse — input validation', () => {
   });
 });
 
+describe('waitForAuthResponse — issuedAt unit validation', () => {
+  it('rejects an issuedAt given in milliseconds', async () => {
+    const { sessionPrivKey } = setupSession();
+    await expect(waitForAuthResponse({
+      requestId: '1'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, issuedAt: Date.now(),
+    })).rejects.toThrow('invalid-issued-at');
+  });
+
+  it('rejects an issuedAt more than AUTH_FRESHNESS_WINDOW_SEC in the future', async () => {
+    const { sessionPrivKey } = setupSession();
+    const issuedAt = Math.floor(Date.now() / 1000) + 3600;
+    await expect(waitForAuthResponse({
+      requestId: '2'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, issuedAt,
+    })).rejects.toThrow('invalid-issued-at');
+  });
+
+  it('accepts an issuedAt with a small forward clock-skew tolerance', async () => {
+    const { sessionPrivKey } = setupSession();
+    const issuedAt = Math.floor(Date.now() / 1000) + 10;
+    const promise = waitForAuthResponse({
+      requestId: '3'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000, issuedAt,
+    });
+    promise.catch(() => { /* times out; not the point of this test */ });
+    await new Promise(r => setTimeout(r, 10));
+    lastWs!.fireError();
+    await promise.catch(() => { /* settled */ });
+  });
+});
+
 describe('waitForAuthResponse — happy path', () => {
   it('resolves with the verified auth event for a valid approved response', async () => {
     const { sessionPrivKey, sessionPubkeyHex, userPrivKey, userPubkeyHex } = setupSession();
