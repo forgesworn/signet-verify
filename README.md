@@ -96,7 +96,7 @@ anchor asks the relay only for responses newer than the restart — which silent
 excludes the one published while you were backgrounded, and it is never asked for
 again. This was a real, 100%-reproducible failure before 0.5.2.
 
-**Distinguish the failures.** The rejection message (also on `err.code`) is:
+**Distinguish the failures.** The rejection message is:
 
 | Code | Meaning | What to offer |
 |---|---|---|
@@ -105,6 +105,8 @@ again. This was a real, 100%-reproducible failure before 0.5.2.
 | `denied` | The user rejected the request | Nothing; respect it |
 | `aborted` | You aborted via `abortSignal` | Nothing |
 | `relay-error` | The socket failed | A retry, anchored to the same `issuedAt` |
+
+`err.code` is also set, but today only for `expired` and `timeout` — the other three are message-only.
 
 **`since` is an escape hatch.** It sets the relay query anchor directly and takes
 precedence over `issuedAt`. Prefer `issuedAt`, which derives it correctly.
