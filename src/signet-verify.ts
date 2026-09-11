@@ -31,7 +31,7 @@ export interface SignetVerifyResult {
 export interface SignetVerifyOptions {
   /** Required age range to verify (e.g., '18+', '13-17') */
   requiredAgeRange: string;
-  /** Relay URL for cross-device communication */
+  /** Relay URL for cross-device communication. Default: `DEFAULT_RELAY_URL` (wss://relay.trotters.cc). */
   relayUrl?: string;
   /** Callback URL for same-device flow */
   callbackUrl?: string;
@@ -216,7 +216,7 @@ export async function verifyAge(requiredAgeRange: string, options?: Partial<Sign
 
   const opts: SignetVerifyOptions = {
     requiredAgeRange,
-    relayUrl: options?.relayUrl || 'wss://relay.damus.io',
+    relayUrl: options?.relayUrl || DEFAULT_RELAY_URL,
     theme: options?.theme || 'auto',
     timeout: options?.timeout || 120000,
     verifierCheckUrl: options?.verifierCheckUrl !== undefined ? options.verifierCheckUrl : 'https://verify.signet.forgesworn.dev',
@@ -364,6 +364,15 @@ export async function verifyAge(requiredAgeRange: string, options?: Partial<Sign
  * — instead of hardcoding 300 and drifting from this library.
  */
 export const AUTH_FRESHNESS_WINDOW_SEC = 300;
+
+/**
+ * The Signet relay — the one ForgeSworn operates and the Signet app publishes
+ * to. Use it unless you have a reason not to: a relay for this flow must serve
+ * kind-1059 gift wraps to an unauthenticated reader, and not all do.
+ * relay.damus.io, the previous default, refuses those reads and has AUTH
+ * misconfigured, so nothing can fetch a response from it.
+ */
+export const DEFAULT_RELAY_URL = 'wss://relay.trotters.cc';
 
 /**
  * Slack subtracted from `issuedAt` when deriving the relay query window, to
