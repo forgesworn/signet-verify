@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { waitForAuthResponse } from '../src/signet-verify';
+import { waitForAuthResponse, AUTH_FRESHNESS_WINDOW_SEC } from '../src/signet-verify';
 import { getConversationKey, encrypt as nip44Encrypt } from 'nostr-tools/nip44';
 import { finalizeEvent, generateSecretKey } from 'nostr-tools/pure';
 import { schnorr } from '@noble/curves/secp256k1.js';
@@ -216,6 +216,38 @@ describe('waitForAuthResponse — input validation', () => {
   });
 });
 
+describe('waitForAuthResponse — issuedAt unit validation', () => {
+  it('rejects an issuedAt given in milliseconds', async () => {
+    const { sessionPrivKey } = setupSession();
+    await expect(waitForAuthResponse({
+      requestId: '1'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, issuedAt: Date.now(),
+    })).rejects.toThrow('invalid-issued-at');
+  });
+
+  it('rejects an issuedAt more than AUTH_FRESHNESS_WINDOW_SEC in the future', async () => {
+    const { sessionPrivKey } = setupSession();
+    const issuedAt = Math.floor(Date.now() / 1000) + 3600;
+    await expect(waitForAuthResponse({
+      requestId: '2'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, issuedAt,
+    })).rejects.toThrow('invalid-issued-at');
+  });
+
+  it('accepts an issuedAt with a small forward clock-skew tolerance', async () => {
+    const { sessionPrivKey } = setupSession();
+    const issuedAt = Math.floor(Date.now() / 1000) + 10;
+    const promise = waitForAuthResponse({
+      requestId: '3'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000, issuedAt,
+    });
+    promise.catch(() => { /* times out; not the point of this test */ });
+    await new Promise(r => setTimeout(r, 10));
+    lastWs!.fireError();
+    await promise.catch(() => { /* settled */ });
+  });
+});
+
 describe('waitForAuthResponse — happy path', () => {
   it('resolves with the verified auth event for a valid approved response', async () => {
     const { sessionPrivKey, sessionPubkeyHex, userPrivKey, userPubkeyHex } = setupSession();
@@ -301,6 +333,57 @@ describe('waitForAuthResponse — subscription window', () => {
     const result = await promise;
     expect(result.pubkey).toBe(userPubkeyHex);
   });
+
+  it('derives the relay window from issuedAt', async () => {
+    const { sessionPrivKey } = setupSession();
+    const issuedAt = Math.floor(Date.now() / 1000) - 240;
+
+    const promise = waitForAuthResponse({
+      requestId: '1'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000, issuedAt,
+    });
+    promise.catch(() => { /* times out; not the point of this test */ });
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(requestedSince()).toBe(issuedAt - 60);
+    lastWs!.fireError();
+    await promise.catch(() => { /* settled */ });
+  });
+
+  it('lets an explicit since override issuedAt', async () => {
+    // `since` is the raw escape hatch and stays authoritative for consumers
+    // already passing it against 0.5.2.
+    const { sessionPrivKey } = setupSession();
+    const issuedAt = Math.floor(Date.now() / 1000) - 240;
+
+    const promise = waitForAuthResponse({
+      requestId: '2'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000, issuedAt, since: 1700000000,
+    });
+    promise.catch(() => { /* times out; not the point of this test */ });
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(requestedSince()).toBe(1700000000);
+    lastWs!.fireError();
+    await promise.catch(() => { /* settled */ });
+  });
+
+  it('ignores a non-finite issuedAt and falls back to the default window', async () => {
+    const { sessionPrivKey } = setupSession();
+    const before = Math.floor(Date.now() / 1000);
+
+    const promise = waitForAuthResponse({
+      requestId: '3'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000, issuedAt: Number.NaN,
+    });
+    promise.catch(() => { /* times out; not the point of this test */ });
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(requestedSince()).toBeGreaterThanOrEqual(before - 61);
+    expect(requestedSince()).toBeLessThanOrEqual(before - 59);
+    lastWs!.fireError();
+    await promise.catch(() => { /* settled */ });
+  });
 });
 
 describe('waitForAuthResponse — rejections', () => {
@@ -335,6 +418,52 @@ describe('waitForAuthResponse — rejections', () => {
     lastWs!.fireError();
     await expect(promise).rejects.toThrow('relay-error');
   });
+
+  it('reports expired, not timeout, when the only response seen was out of window', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = '4'.repeat(64);
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    lastWs!.deliver(buildAuthGiftWrap({
+      userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN,
+      staleAuthEventCreatedAt: Math.floor(Date.now() / 1000) - 600,
+    }));
+
+    await expect(promise).rejects.toThrow('expired');
+  }, 15000);
+
+  it('still reports timeout when nothing at all was seen', async () => {
+    const { sessionPrivKey } = setupSession();
+
+    const promise = waitForAuthResponse({
+      requestId: '5'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await expect(promise).rejects.toThrow('timeout');
+  }, 15000);
+
+  it('carries a machine-readable code on the expiry error', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = '6'.repeat(64);
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    lastWs!.deliver(buildAuthGiftWrap({
+      userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN,
+      staleAuthEventCreatedAt: Math.floor(Date.now() / 1000) - 600,
+    }));
+
+    await promise.catch((err: Error & { code?: string }) => {
+      expect(err.code).toBe('expired');
+    });
+  }, 15000);
 });
 
 describe('waitForAuthResponse — ignores invalid events', () => {
@@ -436,7 +565,7 @@ describe('waitForAuthResponse — ignores invalid events', () => {
     await expect(promise).rejects.toThrow('timeout');
   }, 15000);
 
-  it('ignores a stale authEvent (outside 5-min freshness window)', async () => {
+  it('does not accept a stale authEvent, and says it expired', async () => {
     const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
     const requestId = 'a'.repeat(64);
 
@@ -450,7 +579,9 @@ describe('waitForAuthResponse — ignores invalid events', () => {
     });
     lastWs!.deliver(wrap);
 
-    await expect(promise).rejects.toThrow('timeout');
+    // Still not accepted — the guarantee that matters. But the caller is now
+    // told WHY, so it can offer a fresh sign-in instead of a blank retry.
+    await expect(promise).rejects.toThrow('expired');
   }, 15000);
 
   it('ignores a wrap addressed to a different session pubkey (decrypt fails)', async () => {
@@ -646,6 +777,35 @@ describe('waitForAuthResponse — returning from a phone signer', () => {
 describe('mobile socket recovery', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
+  it('reports expired, not timeout, when the socket is reopened after the sign-in ran out', async () => {
+    // The headline mobile case: Android closes the socket while the user is in
+    // the signer app, and they come back after the window has passed. The retry
+    // reaches connect() past the deadline — which must say the sign-in is over,
+    // not invite a retry against an anchor that has already expired.
+    vi.useFakeTimers();
+    try {
+      const doc = new EventTarget() as EventTarget & { visibilityState: string };
+      doc.visibilityState = 'visible';
+      vi.stubGlobal('document', doc);
+      const { sessionPrivKey } = setupSession();
+      const pending = waitForAuthResponse({
+        requestId: 'b'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+        expectedOrigin: DEFAULT_ORIGIN, issuedAt: Math.floor(Date.now() / 1000),
+      });
+      const assertion = expect(pending).rejects.toThrow('expired');
+      await vi.advanceTimersByTimeAsync(1); // mock socket opens
+      // Move the wall clock past the whole validity window WITHOUT firing the
+      // wait's own timer (setSystemTime shifts pending timers with it), so the
+      // reconnect is the path that observes the deadline.
+      vi.setSystemTime(Date.now() + (AUTH_FRESHNESS_WINDOW_SEC + 30) * 1000);
+      lastWs!.onclose?.(); // visible → schedules connect() in 1 s
+      await vi.advanceTimersByTimeAsync(1000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reopens a socket closed in the background and receives the stored approval', async () => {
     const doc = new EventTarget() as EventTarget & { visibilityState: string };
     doc.visibilityState = 'hidden';
@@ -666,5 +826,237 @@ describe('mobile socket recovery', () => {
     await expect(pending).resolves.toMatchObject({ pubkey: bytesToHex(schnorr.getPublicKey(userPrivKey)) });
     doc.dispatchEvent(new Event('visibilitychange'));
     expect(lastWs!.readyState).toBe(3);
+  });
+});
+
+describe('AUTH_FRESHNESS_WINDOW_SEC', () => {
+  it('is the five-minute window the freshness checks enforce', () => {
+    expect(AUTH_FRESHNESS_WINDOW_SEC).toBe(300);
+  });
+});
+
+describe('waitForAuthResponse — cancellation', () => {
+  it('rejects with aborted and closes the socket when the signal fires', async () => {
+    const { sessionPrivKey } = setupSession();
+    const controller = new AbortController();
+
+    const promise = waitForAuthResponse({
+      requestId: '7'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 600000, abortSignal: controller.signal,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    controller.abort();
+
+    await expect(promise).rejects.toThrow('aborted');
+    expect(lastWs!.readyState).toBe(3);
+  });
+
+  it('rejects immediately when handed an already-aborted signal', async () => {
+    const { sessionPrivKey } = setupSession();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(waitForAuthResponse({
+      requestId: '8'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 600000, abortSignal: controller.signal,
+    })).rejects.toThrow('aborted');
+  });
+
+  it('ignores a response delivered after an abort', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = '9'.repeat(64);
+    const controller = new AbortController();
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN,
+      timeout: 600000, abortSignal: controller.signal,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    const ws = lastWs!;
+    controller.abort();
+    await expect(promise).rejects.toThrow('aborted');
+
+    // Late delivery must not resolve an already-settled promise.
+    expect(() => ws.deliver(buildAuthGiftWrap({
+      userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN,
+    }))).not.toThrow();
+  });
+
+  it('rejects with aborted, not a ReferenceError, when document exists and the signal is already aborted', async () => {
+    const { sessionPrivKey } = setupSession();
+    const controller = new AbortController();
+    controller.abort();
+
+    // Reproduces a real browser environment for this one test: this repo's
+    // suite otherwise runs with no `document` at all, which hid a TDZ bug
+    // where `settle()` referenced `onVisible` before its `const` declaration
+    // had run, on this exact (already-aborted) path.
+    const fakeDocument = {
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      visibilityState: 'visible',
+    };
+    (globalThis as unknown as { document: unknown }).document = fakeDocument;
+    try {
+      await expect(waitForAuthResponse({
+        requestId: 'e'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+        expectedOrigin: DEFAULT_ORIGIN, timeout: 600000, abortSignal: controller.signal,
+      })).rejects.toThrow('aborted');
+    } finally {
+      delete (globalThis as unknown as { document?: unknown }).document;
+    }
+  });
+});
+
+describe('waitForAuthResponse — default timeout', () => {
+  it('waits until the response would expire when anchored', async () => {
+    const { sessionPrivKey } = setupSession();
+    // Issued 60s ago: 240s of validity remain, well past the legacy 120s default.
+    const issuedAt = Math.floor(Date.now() / 1000) - 60;
+
+    // Fake timers must be installed BEFORE the call: waitForAuthResponse arms
+    // its internal timeout timer synchronously (no await before it), so
+    // installing fake timers afterward leaves that timer on the real clock —
+    // advancing the fake clock later would then have no effect on it.
+    vi.useFakeTimers();
+    let promise: ReturnType<typeof waitForAuthResponse>;
+    // A settlement flag, not Promise.race: racing an already-rejected promise
+    // against Promise.resolve() is itself microtask-hop-dependent — a
+    // `.then().catch()` chain takes two hops to resolve even off an
+    // already-settled input, so a bare `Promise.resolve()` branch always wins
+    // regardless of real settlement order. A single two-argument
+    // `.then(onFulfilled, onRejected)` hop avoids that.
+    let settled = false;
+    try {
+      promise = waitForAuthResponse({
+        requestId: 'b'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+        expectedOrigin: DEFAULT_ORIGIN, issuedAt,
+      });
+      promise.then(() => { settled = true; }, () => { settled = true; });
+
+      // Still waiting after the old 120s default would have given up.
+      await vi.advanceTimersByTimeAsync(130_000);
+      await Promise.resolve(); // let a just-fired rejection's handler above run
+      expect(settled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+    lastWs!.fireError();
+    await promise.catch(() => { /* settled */ });
+  });
+
+  it('honours an explicit timeout over the derived one', async () => {
+    const { sessionPrivKey } = setupSession();
+    const issuedAt = Math.floor(Date.now() / 1000);
+
+    const started = Date.now();
+    await expect(waitForAuthResponse({
+      requestId: 'c'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, issuedAt, timeout: 5000,
+    })).rejects.toThrow('timeout');
+    expect(Date.now() - started).toBeLessThan(20_000);
+  }, 30000);
+});
+
+describe('waitForAuthResponse — expiry vs timeout semantics', () => {
+  it("reports expired, not timeout, when the sign-in's validity window simply ran out", async () => {
+    const { sessionPrivKey } = setupSession();
+    // 10s of validity left when the call starts — well short of the old 120s
+    // default, but this is about issuedAt's own deadline, not that default.
+    const issuedAt = Math.floor(Date.now() / 1000) - (AUTH_FRESHNESS_WINDOW_SEC - 10);
+
+    // Fake timers BEFORE the call (lesson from an earlier task: waitForAuthResponse
+    // arms its internal timer synchronously, so installing fake timers after the
+    // call leaves that timer on the real clock and advancing the fake clock later
+    // has no effect on it).
+    vi.useFakeTimers();
+    try {
+      const promise = waitForAuthResponse({
+        requestId: 'f'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+        expectedOrigin: DEFAULT_ORIGIN, issuedAt,
+      });
+      const assertion = expect(promise).rejects.toThrow('expired');
+      await vi.advanceTimersByTimeAsync(11_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still reports timeout when an explicit timeout gives up well before the validity window ends', async () => {
+    const { sessionPrivKey } = setupSession();
+    // 290s of validity remain — nowhere near expiry — but an explicit short
+    // timeout makes the wait give up long before that.
+    const issuedAt = Math.floor(Date.now() / 1000) - 10;
+
+    await expect(waitForAuthResponse({
+      requestId: 'e'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, issuedAt, timeout: 5000,
+    })).rejects.toThrow('timeout');
+  }, 15000);
+});
+
+describe('waitForAuthResponse — every rejection carries .code', () => {
+  it('sets err.code === err.message for denied', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = '4'.repeat(64);
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    lastWs!.deliver(buildAuthGiftWrap({ userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN, status: 'rejected' }));
+    await promise.catch((err: Error & { code?: string }) => {
+      expect(err.code).toBe(err.message);
+      expect(err.code).toBe('denied');
+    });
+  });
+
+  it('sets err.code === err.message for aborted', async () => {
+    const { sessionPrivKey } = setupSession();
+    const controller = new AbortController();
+    const promise = waitForAuthResponse({
+      requestId: '5'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 600000, abortSignal: controller.signal,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    controller.abort();
+    await promise.catch((err: Error & { code?: string }) => {
+      expect(err.code).toBe(err.message);
+      expect(err.code).toBe('aborted');
+    });
+  });
+
+  it('sets err.code === err.message for relay-error', async () => {
+    const { sessionPrivKey } = setupSession();
+    const promise = waitForAuthResponse({
+      requestId: '6'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 600000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    lastWs!.fireError();
+    await promise.catch((err: Error & { code?: string }) => {
+      expect(err.code).toBe(err.message);
+      expect(err.code).toBe('relay-error');
+    });
+  });
+
+  it('sets err.code === err.message for timeout', async () => {
+    const { sessionPrivKey } = setupSession();
+    const promise = waitForAuthResponse({
+      requestId: '7'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await promise.catch((err: Error & { code?: string }) => {
+      expect(err.code).toBe(err.message);
+      expect(err.code).toBe('timeout');
+    });
+  }, 15000);
+
+  it('sets err.code === err.message for an invalid-* input throw', async () => {
+    const { sessionPrivKey } = setupSession();
+    await waitForAuthResponse({
+      requestId: 'not-hex', relayUrl: 'wss://r.test', sessionPrivKey, expectedOrigin: DEFAULT_ORIGIN,
+    }).catch((err: Error & { code?: string }) => {
+      expect(err.code).toBe(err.message);
+      expect(err.code).toBe('invalid-request-id');
+    });
   });
 });

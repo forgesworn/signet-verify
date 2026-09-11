@@ -51,6 +51,73 @@ const result = await Signet.verifyAge('18+', { verifierCheckUrl: 'https://my-bot
 const result = await Signet.verifyAge('18+', { verifierCheckUrl: null });
 ```
 
+## Cross-device Sign-in-with-Signet
+
+`verifyAge` wraps the same-device QR/modal flow. For a cross-device sign-in —
+a consumer minting its own challenge, opening the auth URL or QR on one
+device, and waiting on a relay for the response published from the user's
+phone — use `waitForAuthResponse` directly:
+
+```ts
+import { waitForAuthResponse } from 'signet-verify';
+
+// Stamp this ONCE, when you mint the challenge and open the auth URL / show the QR.
+const issuedAt = Math.floor(Date.now() / 1000);
+
+const result = await waitForAuthResponse({
+  requestId,        // the challenge you put in the auth URL / QR
+  relayUrl,
+  sessionPrivKey,    // your ephemeral session keypair's private key
+  expectedOrigin: location.origin,
+  issuedAt,          // ← pass on EVERY call for this sign-in, including retries
+});
+```
+
+### The sign-in deadline
+
+A cross-device sign-in has exactly one deadline: `issuedAt + AUTH_FRESHNESS_WINDOW_SEC`.
+Past that point, this library stops listening and reports `expired` — show a countdown
+to it.
+
+```ts
+import { waitForAuthResponse, AUTH_FRESHNESS_WINDOW_SEC } from 'signet-verify';
+
+// Stamp this ONCE, when you mint the challenge and open the auth URL / show the QR.
+const issuedAt = Math.floor(Date.now() / 1000);
+const expiresAt = issuedAt + AUTH_FRESHNESS_WINDOW_SEC; // show a countdown to this
+
+const result = await waitForAuthResponse({
+  requestId: challenge,
+  relayUrl,
+  sessionPrivKey,
+  expectedOrigin: location.origin,
+  issuedAt,          // ← pass on EVERY call for this sign-in, retries included
+  abortSignal,       // ← optional; cancels the wait and closes the subscription
+});
+```
+
+**Pass `issuedAt` on every call, including a restart.** On mobile the page is
+suspended the moment it hands off to the signer app. A wait restarted without the
+anchor asks the relay only for responses newer than the restart — which silently
+excludes the one published while you were backgrounded, and it is never asked for
+again. This was a real, 100%-reproducible failure before 0.5.2.
+
+**Distinguish the failures.** The rejection message is:
+
+| Code | Meaning | What to offer |
+|---|---|---|
+| `expired` | This sign-in is over — its validity window ran out, or a response arrived too late | A fresh sign-in (new challenge, new `issuedAt`) |
+| `timeout` | The wait gave up early — an explicit shorter `timeout`, or no `issuedAt` was supplied at all | A retry, anchored to the same `issuedAt` |
+| `denied` | The user rejected the request | Nothing; respect it |
+| `aborted` | You aborted via `abortSignal` | Nothing |
+| `relay-error` | The socket failed | A retry, anchored to the same `issuedAt` |
+| `invalid-issued-at` | `issuedAt` looks like the wrong unit (e.g. milliseconds) or is too far in the future | A bug in your code, not a retry — check you're passing unix **seconds** |
+
+The code is on both `err.message` and `err.code` — branch on either.
+
+**`since` is an escape hatch.** It sets the relay query anchor directly and takes
+precedence over `issuedAt`. Prefer `issuedAt`, which derives it correctly.
+
 ## API
 
 ### `Signet.verifyAge(requiredAgeRange, options?)`

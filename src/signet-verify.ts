@@ -355,6 +355,25 @@ export async function verifyAge(requiredAgeRange: string, options?: Partial<Sign
 
 // ── Cross-device auth response subscription ──────────────────────────────────
 
+/**
+ * Seconds either side of now within which an auth response is accepted.
+ *
+ * This is the ONLY real deadline in the sign-in flow: a response whose rumor or
+ * auth event is older (or newer) than this is dropped. Exported so a consumer
+ * can build an honest countdown — `expiresAt = issuedAt + AUTH_FRESHNESS_WINDOW_SEC`
+ * — instead of hardcoding 300 and drifting from this library.
+ */
+export const AUTH_FRESHNESS_WINDOW_SEC = 300;
+
+/**
+ * Slack subtracted from `issuedAt` when deriving the relay query window, to
+ * absorb clock skew between the consumer and the signer device. Widening the
+ * query loosens nothing: every response must still unwrap under this session
+ * key, carry this request's session tag, carry a signature over this challenge,
+ * match the expected origin, and pass the freshness check above.
+ */
+const ANCHOR_SKEW_SEC = 60;
+
 /** Options for waiting on a cross-device Sign-in-with-Signet response. */
 export interface WaitForAuthOptions {
   /** The challenge (also the `requestId`) sent in the auth URL. 64-char hex. */
@@ -369,28 +388,55 @@ export interface WaitForAuthOptions {
    * site from being accepted. Must be supplied verbatim (scheme + host + optional port).
    */
   expectedOrigin: string;
-  /** Timeout in milliseconds. Clamped to [5_000, 600_000]. Default 120_000. */
+  /**
+   * Timeout in milliseconds. Clamped to [5_000, 600_000].
+   *
+   * Defaults to the remaining validity of the sign-in when `issuedAt` is given
+   * — i.e. until `issuedAt + AUTH_FRESHNESS_WINDOW_SEC` — and to 120_000
+   * otherwise. Supply it only to give up EARLIER than the response would expire.
+   */
   timeout?: number;
   /**
-   * Unix seconds. Only responses published at or after this are asked for.
-   * Defaults to 60 seconds before this call.
+   * Unix **SECONDS**, not milliseconds — `Math.floor(Date.now() / 1000)`. A
+   * value more than `AUTH_FRESHNESS_WINDOW_SEC` seconds in the future throws
+   * `invalid-issued-at`.
    *
-   * Pass it whenever the wait is being RESTARTED for a sign-in that was already
-   * issued — a mobile consumer resuming after the user approved in the signer
-   * app, or a retry after an attempt timed out. The default anchors the window
-   * to the restart, which silently excludes a response published while the
-   * consumer was in the background, and the response is never asked for again.
-   * Anchor it to when the sign-in URL was opened instead:
+   * The moment this sign-in was issued — when you minted the
+   * challenge and opened the auth URL or rendered the QR. This is the anchor
+   * everything else derives from; pass it on EVERY call for a given sign-in,
+   * including retries and resumes.
    *
-   *   const startedAt = Math.floor(Date.now() / 1000);
-   *   // …open the auth URL, user approves in the signer app…
-   *   waitForAuthResponse({ …, since: startedAt - 60 });
+   * Why it matters: the relay query window is computed from this. If a wait is
+   * restarted — a mobile consumer resuming after the user approved in the signer
+   * app, or a retry after a timeout — a window anchored to the restart silently
+   * excludes the response published while the consumer was in the background,
+   * and that response is never asked for again. Anchoring to issuance fixes it:
    *
-   * Staleness is bounded regardless: a response whose rumor is older than five
-   * minutes is rejected after unwrapping, and every response must carry this
-   * request's session tag and a signature over this challenge.
+   *   const issuedAt = Math.floor(Date.now() / 1000);
+   *   // …open the auth URL, user approves in the signer app, page may be suspended…
+   *   waitForAuthResponse({ …, issuedAt });
+   *
+   * The deadline the user is actually racing is
+   * `issuedAt + AUTH_FRESHNESS_WINDOW_SEC`. Show it to them.
+   */
+  issuedAt?: number;
+  /**
+   * Raw relay query anchor in unix seconds — the low-level escape hatch.
+   *
+   * Prefer `issuedAt`, which derives this correctly. `since` is honoured for
+   * consumers written against 0.5.2 and takes precedence over `issuedAt` when
+   * both are supplied. Defaults to 60 seconds before this call when neither is
+   * given.
    */
   since?: number;
+  /**
+   * Aborts the wait and closes its relay subscription.
+   *
+   * Without this a cancelled attempt — the user tapped Back, or a second attempt
+   * started — kept its subscription open until the internal timeout elapsed.
+   * Rejects with `aborted`.
+   */
+  abortSignal?: AbortSignal;
 }
 
 /** Full signed Kind-21236 auth event as carried in the AuthResponse. */
@@ -540,42 +586,83 @@ function sanitiseDisplayName(raw: unknown): string | undefined {
  * the Signet app publishes a NIP-17 gift-wrapped response to the relay and this
  * function resolves with the verified auth result.
  *
- * Rejects with `Error(message)` where message is one of:
+ * Rejects with `Error(message)` where `message` (and `.code`) is one of:
  *   - `'denied'` — user rejected the request
  *   - `'timeout'` — no valid response within the timeout
+ *   - `'expired'` — a structurally valid response arrived outside the freshness window
+ *   - `'aborted'` — the caller's `abortSignal` fired (or was already aborted)
  *   - `'relay-error'` — WebSocket connection failure
- *   - `'invalid-request-id'` / `'invalid-session-privkey'` / `'invalid-relay-url'` — bad input
+ *   - `'relay-closed'` — WebSocket connection closed
+ *   - `'invalid-request-id'` / `'invalid-session-privkey'` / `'invalid-relay-url'` / `'invalid-expected-origin'` / `'invalid-issued-at'` — bad input
  */
 export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<SignetAuthResult> {
+  type WaitForAuthErrorCode =
+    | 'invalid-request-id' | 'invalid-session-privkey' | 'invalid-relay-url'
+    | 'invalid-expected-origin' | 'invalid-issued-at'
+    | 'denied' | 'timeout' | 'expired' | 'aborted' | 'relay-error' | 'relay-closed';
+
+  const authError = (code: WaitForAuthErrorCode): Error => {
+    const err = new Error(code) as Error & { code: WaitForAuthErrorCode };
+    err.code = code;
+    return err;
+  };
+
   if (!/^[0-9a-f]{64}$/i.test(options.requestId)) {
-    throw new Error('invalid-request-id');
+    throw authError('invalid-request-id');
   }
   if (!(options.sessionPrivKey instanceof Uint8Array) || options.sessionPrivKey.length !== 32) {
-    throw new Error('invalid-session-privkey');
+    throw authError('invalid-session-privkey');
   }
   if (!/^wss:\/\//i.test(options.relayUrl) && !/^ws:\/\/(localhost|127\.0\.0\.1)([:\/]|$)/i.test(options.relayUrl)) {
-    throw new Error('invalid-relay-url');
+    throw authError('invalid-relay-url');
   }
   if (typeof options.expectedOrigin !== 'string' || options.expectedOrigin.length === 0) {
-    throw new Error('invalid-expected-origin');
+    throw authError('invalid-expected-origin');
+  }
+  if (Number.isFinite(options.issuedAt) && (options.issuedAt as number) > Math.floor(Date.now() / 1000) + AUTH_FRESHNESS_WINDOW_SEC) {
+    throw authError('invalid-issued-at');
   }
 
   const sessionPubkey = bytesToHex(schnorr.getPublicKey(options.sessionPrivKey));
-  const timeout = Math.max(5000, Math.min(options.timeout ?? 120000, 600000));
+  // Default to "wait as long as the response could still be accepted". A flat
+  // 120s default gave up while a response was valid for another three minutes,
+  // and with a resume the caller then had nothing left to retry against. An
+  // explicit timeout still wins, for a caller that wants to give up sooner.
+  const derivedTimeoutMs = Number.isFinite(options.issuedAt)
+    ? (Math.floor(options.issuedAt as number) + AUTH_FRESHNESS_WINDOW_SEC) * 1000 - Date.now()
+    : 120000;
+  const timeout = Math.max(5000, Math.min(options.timeout ?? derivedTimeoutMs, 600000));
   const requestIdLower = options.requestId.toLowerCase();
   const expectedOrigin = options.expectedOrigin;
 
-  // Anchor the query before Android can suspend this page while opening its signer.
-  // A caller restarting a wait for a sign-in already issued must anchor this to
-  // when that sign-in started, or the fresh window skips past a response the
-  // relay is already holding — see the `since` option.
+  // One anchor, derived once at call entry — never inside ws.onopen, or a
+  // reconnect after a background pause re-anchors past the response. Precedence:
+  // explicit `since` (escape hatch) > derived from `issuedAt` > legacy default.
   const since = Number.isFinite(options.since)
     ? Math.floor(options.since as number)
-    : Math.floor(Date.now() / 1000) - 60;
+    : Number.isFinite(options.issuedAt)
+      ? Math.floor(options.issuedAt as number) - ANCHOR_SKEW_SEC
+      : Math.floor(Date.now() / 1000) - ANCHOR_SKEW_SEC;
+
+  // True once the sign-in's own validity window has elapsed — distinct from
+  // `sawExpired`, which only fires when a STALE response was actually seen.
+  // Without this, a consumer who simply never got a response before
+  // issuedAt + AUTH_FRESHNESS_WINDOW_SEC was told `timeout`, and the README's own
+  // advice ("retry with the same issuedAt on timeout") is dead on arrival there —
+  // the derived timeout for that retry is already <= 0, clamps to 5s, and fails
+  // again immediately. 1s tolerance absorbs timer-firing granularity.
+  const pastValidity = (): boolean =>
+    Number.isFinite(options.issuedAt) &&
+    Date.now() >= (Math.floor(options.issuedAt as number) + AUTH_FRESHNESS_WINDOW_SEC) * 1000 - 1000;
 
   return new Promise<SignetAuthResult>((resolve, reject) => {
     const subId = `sa-${Math.random().toString(36).slice(2, 12)}`;
     let settled = false;
+    // Set when a response that was structurally valid for THIS challenge arrived
+    // outside the freshness window. Reported on settle rather than on sight: a
+    // relay may serve an unrelated replay, and that must not abort a wait a
+    // genuine response could still satisfy.
+    let sawExpired = false;
     let ws: WebSocket | undefined;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const deadline = Date.now() + timeout;
@@ -586,12 +673,20 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       clearTimeout(timer);
       clearTimeout(retryTimer);
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible);
+      options.abortSignal?.removeEventListener('abort', onAbort);
       try { ws?.close(); } catch { /* ignore */ }
       action();
     };
 
+    // Every give-up says the same thing: `expired` if this sign-in is over,
+    // `timeout` if the wait stopped early. One helper, because there are three
+    // give-up paths — the timer, a resume, and a reconnect — and a copy that
+    // drifted once already reported `timeout` on the mobile reconnect path.
+    const giveUp = (): void =>
+      settle(() => reject(authError(sawExpired || pastValidity() ? 'expired' : 'timeout')));
+
     const timer = setTimeout(() => {
-      settle(() => reject(new Error('timeout')));
+      giveUp();
     }, timeout);
 
     const subscribe = () => {
@@ -605,7 +700,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       // Replay the stored response after switching back from a native signer.
       // The original challenge, origin, signatures and freshness checks still apply.
       if (settled || document.visibilityState !== 'visible') return;
-      if (Date.now() >= deadline) return settle(() => reject(new Error('timeout')));
+      if (Date.now() >= deadline) return giveUp();
       if (!ws || ws.readyState >= 2) connect();
       else subscribe();
     };
@@ -634,14 +729,17 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
 
       const statusTag = rumor.tags.find(t => t[0] === 'status');
       if (statusTag?.[1] === 'rejected') {
-        settle(() => reject(new Error('denied')));
+        settle(() => reject(authError('denied')));
         return;
       }
       if (statusTag?.[1] !== 'approved') return;
 
       // Freshness check — protects against stale replays the relay might serve.
       const ageSec = Math.abs(Date.now() / 1000 - rumor.created_at);
-      if (ageSec > 300) return;
+      if (ageSec > AUTH_FRESHNESS_WINDOW_SEC) {
+        sawExpired = true;
+        return;
+      }
 
       let inner: Record<string, unknown> | null;
       try {
@@ -700,7 +798,10 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
 
       // Freshness check on the auth event itself (the user's signature timestamp)
       const authEventAgeSec = Math.abs(Date.now() / 1000 - (ae.created_at as number));
-      if (authEventAgeSec > 300) return;
+      if (authEventAgeSec > AUTH_FRESHNESS_WINDOW_SEC) {
+        sawExpired = true;
+        return;
+      }
 
       const verifiedAuthEvent: SignetAuthEvent = {
         id: (ae.id as string).toLowerCase(),
@@ -733,9 +834,9 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       }));
     };
 
-    const retryOrFail = (reason: string) => {
+    const retryOrFail = (reason: 'relay-error' | 'relay-closed') => {
       if (settled) return;
-      if (typeof document === 'undefined') return settle(() => reject(new Error(reason)));
+      if (typeof document === 'undefined') return settle(() => reject(authError(reason)));
       clearTimeout(retryTimer);
       // Android may close a background tab's socket. Retry on return, using
       // the same session and original filter, within the original timeout.
@@ -744,7 +845,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
     function connect() {
       if (settled) return;
       clearTimeout(retryTimer);
-      if (Date.now() >= deadline) return settle(() => reject(new Error('timeout')));
+      if (Date.now() >= deadline) return giveUp();
       const previous = ws;
       ws = undefined;
       try { previous?.close(); } catch { /* already closed */ }
@@ -759,6 +860,19 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
         retryOrFail('relay-error');
       }
     }
+
+    // Checked here — after onVisible exists — rather than up near `timer`:
+    // settle() reaches back into onVisible via document.removeEventListener,
+    // so settling any earlier (including this already-aborted short-circuit)
+    // would reference onVisible before its `const` declaration had run.
+    const onAbort = () => settle(() => reject(authError('aborted')));
+    if (options.abortSignal?.aborted) {
+      // Nothing to tear down yet — settle before a socket is ever opened.
+      settle(() => reject(authError('aborted')));
+      return;
+    }
+    options.abortSignal?.addEventListener('abort', onAbort, { once: true });
+
     connect();
   });
 }
