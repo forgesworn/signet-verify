@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.1 (2026-09-11)
+
+### Bug Fixes
+
+- fail with relay-refused when the relay closes the subscription (#43) (auth)
+
+
+
 ## 0.6.0 (2026-09-11)
 
 ### Features
