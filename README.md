@@ -51,6 +51,64 @@ const result = await Signet.verifyAge('18+', { verifierCheckUrl: 'https://my-bot
 const result = await Signet.verifyAge('18+', { verifierCheckUrl: null });
 ```
 
+## Cross-device Sign-in-with-Signet
+
+`verifyAge` wraps the same-device QR/modal flow. For a cross-device sign-in —
+a consumer minting its own challenge, opening the auth URL or QR on one
+device, and waiting on a relay for the response published from the user's
+phone — use `waitForAuthResponse` directly:
+
+```ts
+import { waitForAuthResponse, AUTH_FRESHNESS_WINDOW_SEC } from 'signet-verify';
+
+const result = await waitForAuthResponse({
+  requestId,        // the challenge you put in the auth URL / QR
+  relayUrl,
+  sessionPrivKey,    // your ephemeral session keypair's private key
+  expectedOrigin: location.origin,
+});
+```
+
+### The sign-in deadline
+
+A cross-device sign-in has exactly one deadline, and you should show it to the user.
+
+```ts
+import { waitForAuthResponse, AUTH_FRESHNESS_WINDOW_SEC } from 'signet-verify';
+
+// Stamp this ONCE, when you mint the challenge and open the auth URL / show the QR.
+const issuedAt = Math.floor(Date.now() / 1000);
+const expiresAt = issuedAt + AUTH_FRESHNESS_WINDOW_SEC; // show a countdown to this
+
+const result = await waitForAuthResponse({
+  requestId: challenge,
+  relayUrl,
+  sessionPrivKey,
+  expectedOrigin: location.origin,
+  issuedAt,          // ← pass on EVERY call for this sign-in, retries included
+  abortSignal,       // ← optional; cancels the wait and closes the subscription
+});
+```
+
+**Pass `issuedAt` on every call, including a restart.** On mobile the page is
+suspended the moment it hands off to the signer app. A wait restarted without the
+anchor asks the relay only for responses newer than the restart — which silently
+excludes the one published while you were backgrounded, and it is never asked for
+again. This was a real, 100%-reproducible failure before 0.5.2.
+
+**Distinguish the failures.** The rejection message (also on `err.code`) is:
+
+| Code | Meaning | What to offer |
+|---|---|---|
+| `expired` | A valid response arrived, but outside the window — the user was too late | A fresh sign-in |
+| `timeout` | Nothing arrived | A retry, anchored to the same `issuedAt` |
+| `denied` | The user rejected the request | Nothing; respect it |
+| `aborted` | You aborted via `abortSignal` | Nothing |
+| `relay-error` | The socket failed | A retry, anchored to the same `issuedAt` |
+
+**`since` is an escape hatch.** It sets the relay query anchor directly and takes
+precedence over `issuedAt`. Prefer `issuedAt`, which derives it correctly.
+
 ## API
 
 ### `Signet.verifyAge(requiredAgeRange, options?)`
