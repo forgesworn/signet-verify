@@ -602,9 +602,20 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       ? Math.floor(options.issuedAt as number) - ANCHOR_SKEW_SEC
       : Math.floor(Date.now() / 1000) - ANCHOR_SKEW_SEC;
 
+  const authError = (code: 'timeout' | 'expired'): Error => {
+    const err = new Error(code) as Error & { code: string };
+    err.code = code;
+    return err;
+  };
+
   return new Promise<SignetAuthResult>((resolve, reject) => {
     const subId = `sa-${Math.random().toString(36).slice(2, 12)}`;
     let settled = false;
+    // Set when a response that was structurally valid for THIS challenge arrived
+    // outside the freshness window. Reported on settle rather than on sight: a
+    // relay may serve an unrelated replay, and that must not abort a wait a
+    // genuine response could still satisfy.
+    let sawExpired = false;
     let ws: WebSocket | undefined;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const deadline = Date.now() + timeout;
@@ -620,7 +631,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
     };
 
     const timer = setTimeout(() => {
-      settle(() => reject(new Error('timeout')));
+      settle(() => reject(authError(sawExpired ? 'expired' : 'timeout')));
     }, timeout);
 
     const subscribe = () => {
@@ -634,7 +645,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       // Replay the stored response after switching back from a native signer.
       // The original challenge, origin, signatures and freshness checks still apply.
       if (settled || document.visibilityState !== 'visible') return;
-      if (Date.now() >= deadline) return settle(() => reject(new Error('timeout')));
+      if (Date.now() >= deadline) return settle(() => reject(authError(sawExpired ? 'expired' : 'timeout')));
       if (!ws || ws.readyState >= 2) connect();
       else subscribe();
     };
@@ -670,7 +681,10 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
 
       // Freshness check — protects against stale replays the relay might serve.
       const ageSec = Math.abs(Date.now() / 1000 - rumor.created_at);
-      if (ageSec > AUTH_FRESHNESS_WINDOW_SEC) return;
+      if (ageSec > AUTH_FRESHNESS_WINDOW_SEC) {
+        sawExpired = true;
+        return;
+      }
 
       let inner: Record<string, unknown> | null;
       try {
@@ -729,7 +743,10 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
 
       // Freshness check on the auth event itself (the user's signature timestamp)
       const authEventAgeSec = Math.abs(Date.now() / 1000 - (ae.created_at as number));
-      if (authEventAgeSec > AUTH_FRESHNESS_WINDOW_SEC) return;
+      if (authEventAgeSec > AUTH_FRESHNESS_WINDOW_SEC) {
+        sawExpired = true;
+        return;
+      }
 
       const verifiedAuthEvent: SignetAuthEvent = {
         id: (ae.id as string).toLowerCase(),

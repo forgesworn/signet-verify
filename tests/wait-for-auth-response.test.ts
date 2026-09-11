@@ -386,6 +386,52 @@ describe('waitForAuthResponse — rejections', () => {
     lastWs!.fireError();
     await expect(promise).rejects.toThrow('relay-error');
   });
+
+  it('reports expired, not timeout, when the only response seen was out of window', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = '4'.repeat(64);
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    lastWs!.deliver(buildAuthGiftWrap({
+      userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN,
+      staleAuthEventCreatedAt: Math.floor(Date.now() / 1000) - 600,
+    }));
+
+    await expect(promise).rejects.toThrow('expired');
+  }, 15000);
+
+  it('still reports timeout when nothing at all was seen', async () => {
+    const { sessionPrivKey } = setupSession();
+
+    const promise = waitForAuthResponse({
+      requestId: '5'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await expect(promise).rejects.toThrow('timeout');
+  }, 15000);
+
+  it('carries a machine-readable code on the expiry error', async () => {
+    const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
+    const requestId = '6'.repeat(64);
+
+    const promise = waitForAuthResponse({
+      requestId, relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, timeout: 5000,
+    });
+    await new Promise(r => setTimeout(r, 10));
+    lastWs!.deliver(buildAuthGiftWrap({
+      userPrivKey, sessionPubkeyHex, requestId, origin: DEFAULT_ORIGIN,
+      staleAuthEventCreatedAt: Math.floor(Date.now() / 1000) - 600,
+    }));
+
+    await promise.catch((err: Error & { code?: string }) => {
+      expect(err.code).toBe('expired');
+    });
+  }, 15000);
 });
 
 describe('waitForAuthResponse — ignores invalid events', () => {
@@ -487,7 +533,7 @@ describe('waitForAuthResponse — ignores invalid events', () => {
     await expect(promise).rejects.toThrow('timeout');
   }, 15000);
 
-  it('ignores a stale authEvent (outside 5-min freshness window)', async () => {
+  it('does not accept a stale authEvent, and says it expired', async () => {
     const { sessionPrivKey, sessionPubkeyHex, userPrivKey } = setupSession();
     const requestId = 'a'.repeat(64);
 
@@ -501,7 +547,9 @@ describe('waitForAuthResponse — ignores invalid events', () => {
     });
     lastWs!.deliver(wrap);
 
-    await expect(promise).rejects.toThrow('timeout');
+    // Still not accepted — the guarantee that matters. But the caller is now
+    // told WHY, so it can offer a fresh sign-in instead of a blank retry.
+    await expect(promise).rejects.toThrow('expired');
   }, 15000);
 
   it('ignores a wrap addressed to a different session pubkey (decrypt fails)', async () => {
