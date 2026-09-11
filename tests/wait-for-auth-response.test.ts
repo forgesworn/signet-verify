@@ -896,3 +896,41 @@ describe('waitForAuthResponse — default timeout', () => {
     expect(Date.now() - started).toBeLessThan(20_000);
   }, 30000);
 });
+
+describe('waitForAuthResponse — expiry vs timeout semantics', () => {
+  it("reports expired, not timeout, when the sign-in's validity window simply ran out", async () => {
+    const { sessionPrivKey } = setupSession();
+    // 10s of validity left when the call starts — well short of the old 120s
+    // default, but this is about issuedAt's own deadline, not that default.
+    const issuedAt = Math.floor(Date.now() / 1000) - (AUTH_FRESHNESS_WINDOW_SEC - 10);
+
+    // Fake timers BEFORE the call (lesson from an earlier task: waitForAuthResponse
+    // arms its internal timer synchronously, so installing fake timers after the
+    // call leaves that timer on the real clock and advancing the fake clock later
+    // has no effect on it).
+    vi.useFakeTimers();
+    try {
+      const promise = waitForAuthResponse({
+        requestId: 'f'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+        expectedOrigin: DEFAULT_ORIGIN, issuedAt,
+      });
+      const assertion = expect(promise).rejects.toThrow('expired');
+      await vi.advanceTimersByTimeAsync(11_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still reports timeout when an explicit timeout gives up well before the validity window ends', async () => {
+    const { sessionPrivKey } = setupSession();
+    // 290s of validity remain — nowhere near expiry — but an explicit short
+    // timeout makes the wait give up long before that.
+    const issuedAt = Math.floor(Date.now() / 1000) - 10;
+
+    await expect(waitForAuthResponse({
+      requestId: 'e'.repeat(64), relayUrl: 'wss://r.test', sessionPrivKey,
+      expectedOrigin: DEFAULT_ORIGIN, issuedAt, timeout: 5000,
+    })).rejects.toThrow('timeout');
+  }, 15000);
+});

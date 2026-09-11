@@ -631,6 +631,17 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
     return err;
   };
 
+  // True once the sign-in's own validity window has elapsed — distinct from
+  // `sawExpired`, which only fires when a STALE response was actually seen.
+  // Without this, a consumer who simply never got a response before
+  // issuedAt + AUTH_FRESHNESS_WINDOW_SEC was told `timeout`, and the README's own
+  // advice ("retry with the same issuedAt on timeout") is dead on arrival there —
+  // the derived timeout for that retry is already <= 0, clamps to 5s, and fails
+  // again immediately. 1s tolerance absorbs timer-firing granularity.
+  const pastValidity = (): boolean =>
+    Number.isFinite(options.issuedAt) &&
+    Date.now() >= (Math.floor(options.issuedAt as number) + AUTH_FRESHNESS_WINDOW_SEC) * 1000 - 1000;
+
   return new Promise<SignetAuthResult>((resolve, reject) => {
     const subId = `sa-${Math.random().toString(36).slice(2, 12)}`;
     let settled = false;
@@ -655,7 +666,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
     };
 
     const timer = setTimeout(() => {
-      settle(() => reject(authError(sawExpired ? 'expired' : 'timeout')));
+      settle(() => reject(authError(sawExpired || pastValidity() ? 'expired' : 'timeout')));
     }, timeout);
 
     const subscribe = () => {
@@ -669,7 +680,7 @@ export async function waitForAuthResponse(options: WaitForAuthOptions): Promise<
       // Replay the stored response after switching back from a native signer.
       // The original challenge, origin, signatures and freshness checks still apply.
       if (settled || document.visibilityState !== 'visible') return;
-      if (Date.now() >= deadline) return settle(() => reject(authError(sawExpired ? 'expired' : 'timeout')));
+      if (Date.now() >= deadline) return settle(() => reject(authError(sawExpired || pastValidity() ? 'expired' : 'timeout')));
       if (!ws || ws.readyState >= 2) connect();
       else subscribe();
     };
