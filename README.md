@@ -2,6 +2,12 @@
 
 Add privacy-preserving age verification to any website. One script tag, one function call. No personal data collected.
 
+## Install
+
+```bash
+npm install signet-verify
+```
+
 ## Quick Start
 
 ```html
