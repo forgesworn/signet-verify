@@ -1,0 +1,67 @@
+# Signet Verify
+
+> Age verification on a website usually means collecting ID or sending users
+> off to a third-party checker. signet-verify is a browser SDK that checks a
+> cryptographic age credential from the Signet app instead, without the site
+> ever seeing personal data.
+
+For websites that need to gate content by age range (adult content, age
+brackets for minors) without running their own verification flow. A single
+function call opens a QR/modal, waits for the user's Signet app to respond,
+and checks both the credential and the issuing verifier's professional
+registration.
+
+## Getting Started
+
+```bash
+npm install signet-verify
+```
+
+```javascript
+import { verifyAge } from 'signet-verify';
+
+const result = await verifyAge('18+');
+if (result.verified) {
+  // user confirmed 18+ by a confirmed professional verifier
+}
+```
+
+For a script tag / CDN build, use the IIFE export (`signet-verify/iife`),
+which exposes `window.Signet`.
+
+## Key Concepts
+
+- **Credential, not identity**: the proof carries an age range and verifier
+  info, never a name, date of birth or other PII.
+- **Verifier confirmation**: by default a result only counts as `verified`
+  when the issuing verifier is checked against a public professional
+  register (GMC, SRA, TRA, etc.) via a verification bot; this can be relaxed
+  with `acceptUnconfirmed` or pointed at a different bot with
+  `verifierCheckUrl`.
+- **Same-device vs cross-device**: `verifyAge` covers the common same-device
+  QR/modal flow; `waitForAuthResponse` is the lower-level cross-device
+  primitive for a consumer that mints its own challenge and waits on a relay
+  for the signed response.
+- **The sign-in deadline**: a cross-device wait has one deadline,
+  `issuedAt + AUTH_FRESHNESS_WINDOW_SEC`. `issuedAt` must be passed on every
+  call for the same sign-in, including retries after the page was
+  backgrounded, or the relay query anchor is wrong.
+
+## API Surface
+
+- `verifyAge(requiredAgeRange, options?) => Promise<SignetVerifyResult>`:
+  the same-device verification flow.
+- `waitForAuthResponse(options) => Promise<SignetAuthResult>`: the
+  cross-device primitive; see the README for the full option set
+  (`requestId`, `relayUrl`, `sessionPrivKey`, `expectedOrigin`, `issuedAt`,
+  `abortSignal`).
+- `AUTH_FRESHNESS_WINDOW_SEC`, `DEFAULT_RELAY_URL`: constants used to
+  compute and check the sign-in deadline.
+- Result and option types: `SignetVerifyResult`, `SignetVerifyOptions`,
+  `WaitForAuthOptions`, `SignetAuthResult`, `SignetAuthEvent`.
+
+## Optional
+
+- Full API reference, error codes and age range values: [README](README.md)
+- Cross-device example: [examples/cross-device-login.html](examples/cross-device-login.html)
+- Release history: [CHANGELOG.md](CHANGELOG.md)

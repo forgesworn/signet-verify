@@ -14,7 +14,8 @@
     "./iife": "./dist/signet-verify.iife.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "llms.txt"
   ],
   "publishConfig": {
     "provenance": true
