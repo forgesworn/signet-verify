@@ -17,6 +17,23 @@
     "dist",
     "llms.txt"
   ],
+  "homepage": "https://github.com/forgesworn/signet-verify#readme",
+  "keywords": [
+    "signet",
+    "age-verification",
+    "age-gate",
+    "nostr",
+    "credential",
+    "verifiable-credential",
+    "cross-device",
+    "sign-in",
+    "authentication",
+    "privacy",
+    "gdpr",
+    "compliance",
+    "sdk",
+    "browser"
+  ],
   "publishConfig": {
     "provenance": true
   },
