@@ -117,7 +117,7 @@ again. This was a real, 100%-reproducible failure before 0.5.2.
 | `denied` | The user rejected the request | Nothing; respect it |
 | `aborted` | You aborted via `abortSignal` | Nothing |
 | `relay-error` | The socket failed | A retry, anchored to the same `issuedAt` |
-| `relay-refused` | The relay closed the subscription — `err.reason` has its text (e.g. `auth-required`) | A relay that serves gift wraps to an unauthenticated reader. `relay.damus.io` currently does not; `relay.trotters.cc` (the Signet app's relay) does |
+| `relay-refused` | The relay closed the subscription — `err.reason` has its text (e.g. `auth-required`) | A relay that serves gift wraps to an unauthenticated reader. `relay.damus.io` currently does not; `nos.lol` (the default) does |
 | `invalid-issued-at` | `issuedAt` looks like the wrong unit (e.g. milliseconds) or is too far in the future | A bug in your code, not a retry — check you're passing unix **seconds** |
 
 The code is on both `err.message` and `err.code` — branch on either.
@@ -135,7 +135,7 @@ Returns `Promise<SignetVerifyResult>`
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `relayUrl` | `string` | `DEFAULT_RELAY_URL` (`wss://relay.trotters.cc`) | Relay URL for cross-device communication. Must serve kind-1059 gift wraps to an unauthenticated reader |
+| `relayUrl` | `string` | `DEFAULT_RELAY_URL` (`wss://nos.lol`) | Relay URL for cross-device communication. Must serve kind-1059 gift wraps to an unauthenticated reader |
 | `theme` | `'light' \| 'dark' \| 'auto'` | `'auto'` | Modal colour scheme |
 | `timeout` | `number` | `120000` | Timeout in milliseconds |
 | `verifierCheckUrl` | `string \| null` | `'https://verify.signet.forgesworn.dev'` | Verification bot URL. Set to `null` to skip. |
