@@ -1115,11 +1115,12 @@ describe('waitForAuthResponse — the relay refuses the subscription', () => {
 });
 
 describe('DEFAULT_RELAY_URL', () => {
-  it('is the Signet relay — the one we operate, and one that serves gift wraps', () => {
+  it('is a public relay that serves gift wraps to an unauthenticated reader', () => {
     // relay.damus.io was verifyAge's default. It accepts a gift wrap, then
     // refuses kind-1059 reads to an unauthenticated client with its AUTH
-    // misconfigured, so no client can fetch one. relay.trotters.cc is the relay
-    // the Signet app itself publishes to.
-    expect(DEFAULT_RELAY_URL).toBe('wss://relay.trotters.cc');
+    // misconfigured, so no client can fetch one. nos.lol accepts the gift wrap
+    // and serves it back without AUTH. The Signet app replies on whichever
+    // relay the request names, so no operator relay is needed.
+    expect(DEFAULT_RELAY_URL).toBe('wss://nos.lol');
   });
 });

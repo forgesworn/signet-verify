@@ -31,7 +31,7 @@ export interface SignetVerifyResult {
 export interface SignetVerifyOptions {
   /** Required age range to verify (e.g., '18+', '13-17') */
   requiredAgeRange: string;
-  /** Relay URL for cross-device communication. Default: `DEFAULT_RELAY_URL` (wss://relay.trotters.cc). */
+  /** Relay URL for cross-device communication. Default: `DEFAULT_RELAY_URL` (wss://nos.lol). */
   relayUrl?: string;
   /** Callback URL for same-device flow */
   callbackUrl?: string;
@@ -372,7 +372,7 @@ export const AUTH_FRESHNESS_WINDOW_SEC = 300;
  * relay.damus.io, the previous default, refuses those reads and has AUTH
  * misconfigured, so nothing can fetch a response from it.
  */
-export const DEFAULT_RELAY_URL = 'wss://relay.trotters.cc';
+export const DEFAULT_RELAY_URL = 'wss://nos.lol';
 
 /**
  * Slack subtracted from `issuedAt` when deriving the relay query window, to
