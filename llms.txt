@@ -27,7 +27,8 @@ if (result.verified) {
 ```
 
 For a script tag / CDN build, use the IIFE export (`signet-verify/iife`),
-which exposes `window.Signet`.
+which exposes `window.Signet`, for example
+`https://cdn.jsdelivr.net/npm/signet-verify@0.7.1/dist/signet-verify.iife.js`.
 
 ## Key Concepts
 
@@ -50,18 +51,26 @@ which exposes `window.Signet`.
 ## API Surface
 
 - `verifyAge(requiredAgeRange, options?) => Promise<SignetVerifyResult>`:
-  the same-device verification flow.
+  the same-device verification flow. `requiredAgeRange` must be one of
+  `'0-3'`, `'4-7'`, `'8-12'`, `'13-17'`, `'18+'` and is matched exactly.
+  Failures are reported in `result.error`, not as a rejection.
 - `waitForAuthResponse(options) => Promise<SignetAuthResult>`: the
-  cross-device primitive; see the README for the full option set
-  (`requestId`, `relayUrl`, `sessionPrivKey`, `expectedOrigin`, `issuedAt`,
-  `abortSignal`).
-- `AUTH_FRESHNESS_WINDOW_SEC`, `DEFAULT_RELAY_URL`: constants used to
-  compute and check the sign-in deadline.
+  cross-device primitive. It resolves on success and rejects with an `Error`
+  whose `message` and `code` are the failure code (`expired`, `timeout`,
+  `denied`, `aborted`, `relay-refused`, and others listed in the README).
+  Options: `requestId`, `relayUrl`, `sessionPrivKey` (a 32-byte
+  `Uint8Array`) and `expectedOrigin` are required; `issuedAt` (unix
+  seconds), `timeout` (milliseconds), `since` (unix seconds) and
+  `abortSignal` are optional. The README has the full option and result
+  tables.
+- `AUTH_FRESHNESS_WINDOW_SEC` (`300`, seconds), `DEFAULT_RELAY_URL`
+  (`'wss://nos.lol'`): constants used to compute and check the sign-in
+  deadline.
 - Result and option types: `SignetVerifyResult`, `SignetVerifyOptions`,
   `WaitForAuthOptions`, `SignetAuthResult`, `SignetAuthEvent`.
 
 ## Optional
 
 - Full API reference, error codes and age range values: [README](README.md)
-- Cross-device example: [examples/cross-device-login.html](examples/cross-device-login.html)
+- Cross-device example: [examples/cross-device-login.html](https://github.com/forgesworn/signet-verify/blob/main/examples/cross-device-login.html)
 - Release history: [CHANGELOG.md](CHANGELOG.md)
