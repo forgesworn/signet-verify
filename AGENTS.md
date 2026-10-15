@@ -48,6 +48,10 @@ dist/                   - build output (git-ignored)
 - Do not recompute `issuedAt` on a restarted wait: the relay query anchor
   depends on the original value, and a fresh one silently misses responses
   published while the page was backgrounded.
+- `verifyAge` never connects to a relay: its modal receives the response on
+  a `BroadcastChannel` (`signet-verify-<requestId>`) and its only network
+  request is to the verification bot. `relayUrl` there is just a field in
+  the request object. Only `waitForAuthResponse` talks to a relay.
 - `since` overrides `issuedAt` for the relay query anchor; only set it
   directly if you need to bypass the `issuedAt` derivation.
 - The IIFE build must stay free of runtime dependencies beyond what

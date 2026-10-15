@@ -7,9 +7,9 @@
 
 For websites that need to gate content by age range (adult content, age
 brackets for minors) without running their own verification flow. A single
-function call opens a QR/modal, waits for the user's Signet app to respond,
-and checks both the credential and the issuing verifier's professional
-registration.
+function call opens a modal, waits for a signed response on a same-origin
+`BroadcastChannel` (no relay connection), and checks both the credential and
+the issuing verifier's professional registration.
 
 ## Getting Started
 
@@ -39,10 +39,14 @@ which exposes `window.Signet`, for example
   register (GMC, SRA, TRA, etc.) via a verification bot; this can be relaxed
   with `acceptUnconfirmed` or pointed at a different bot with
   `verifierCheckUrl`.
-- **Same-device vs cross-device**: `verifyAge` covers the common same-device
-  QR/modal flow; `waitForAuthResponse` is the lower-level cross-device
-  primitive for a consumer that mints its own challenge and waits on a relay
-  for the signed response.
+- **Same-browser vs cross-device**: `verifyAge` covers the modal flow and
+  receives its response on a `BroadcastChannel` named
+  `signet-verify-<requestId>`; it makes one network request, to the
+  verification bot, and never connects to a relay (its `relayUrl` option is
+  only written into the request object). `waitForAuthResponse` is the
+  lower-level cross-device primitive for a consumer that mints its own
+  challenge and waits on a relay for the signed response; only it needs a
+  relay that serves kind-1059 gift wraps to an unauthenticated reader.
 - **The sign-in deadline**: a cross-device wait has one deadline,
   `issuedAt + AUTH_FRESHNESS_WINDOW_SEC`. `issuedAt` must be passed on every
   call for the same sign-in, including retries after the page was
@@ -51,7 +55,7 @@ which exposes `window.Signet`, for example
 ## API Surface
 
 - `verifyAge(requiredAgeRange, options?) => Promise<SignetVerifyResult>`:
-  the same-device verification flow. `requiredAgeRange` must be one of
+  the same-browser modal flow. `requiredAgeRange` must be one of
   `'0-3'`, `'4-7'`, `'8-12'`, `'13-17'`, `'18+'` and is matched exactly.
   Failures are reported in `result.error`, not as a rejection.
 - `waitForAuthResponse(options) => Promise<SignetAuthResult>`: the

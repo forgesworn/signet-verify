@@ -40,11 +40,12 @@ if (!result.verified) console.log('Not verified:', result.error);
 ## How It Works
 
 1. Website calls `Signet.verifyAge('18+')`
-2. A modal appears with a QR code
-3. User scans with their Signet app and approves
-4. The app sends a cryptographic proof (no PII)
-5. The SDK verifies the proof AND checks the verifier's professional registration
-6. Returns the result — the user's app can be closed
+2. A modal opens. The SDK builds a `signet-verify-request` (request ID, required age range, `relayUrl`, timestamp) but the modal shows only a truncated text placeholder, `signet:verify:` plus the first 40 characters of the base64 payload, not a rendered QR code. Those 40 characters stop before the request ID and the relay URL
+3. The modal listens on a `BroadcastChannel` named `signet-verify-<requestId>`. It opens no WebSocket and never reads from a relay. The proof must arrive as a `signet-verify-response` message carrying that request ID on that channel, so whatever posts it has to run in the same origin and browser profile as the page
+4. The SDK checks the credential's signature, expiry and age range, then asks the verification bot about the verifier's professional registration
+5. Returns the result
+
+To receive a response from another device over a relay, use `waitForAuthResponse` (see below); `verifyAge` does not do that.
 
 ## Verifier Trust
 
@@ -72,7 +73,8 @@ const result = await Signet.verifyAge('18+', { verifierCheckUrl: null });
 
 `verifyAge` resolves with a `SignetVerifyResult` and reports failures in `result.error` rather than rejecting. `waitForAuthResponse` resolves with a `SignetAuthResult` on success and rejects with an `Error` whose `message` and `code` are the failure code (see below). Their `timeout` options also differ: for `verifyAge` it is how long the modal waits before resolving with `error: 'timeout'`; for `waitForAuthResponse` it is an optional, earlier give-up.
 
-`verifyAge` wraps the same-device QR/modal flow. For a cross-device sign-in,
+`verifyAge` is the same-browser modal flow: its response arrives on a
+`BroadcastChannel`, never over a relay. For a cross-device sign-in,
 a consumer minting its own challenge, opening the auth URL or QR on one
 device, and waiting on a relay for the response published from the user's
 phone, use `waitForAuthResponse` directly:
@@ -170,7 +172,7 @@ Returns `Promise<SignetVerifyResult>`. Failures are reported in `result.error`, 
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `relayUrl` | `string` | `DEFAULT_RELAY_URL` (`wss://nos.lol`) | Relay URL passed to the Signet app in the request. `verifyAge` itself does not connect to it. Must serve kind-1059 gift wraps to an unauthenticated reader |
+| `relayUrl` | `string` | `DEFAULT_RELAY_URL` (`wss://nos.lol`) | Written into the `relayUrl` field of the request object `verifyAge` builds. `verifyAge` never connects to it, the response does not travel over it (it arrives on a `BroadcastChannel`), and the text the modal shows does not include it. The kind-1059 gift-wrap requirement under `waitForAuthResponse` therefore does not apply to this option |
 | `theme` | `'light' \| 'dark' \| 'auto'` | `'auto'` | Modal colour scheme |
 | `timeout` | `number` | `120000` | Timeout in milliseconds, clamped to 5000 to 600000 |
 | `verifierCheckUrl` | `string \| null` | `'https://verify.signet.forgesworn.dev'` | Verification bot URL. Set to `null` to skip. |
@@ -251,5 +253,5 @@ Matching is exact: the credential's age range must equal `requiredAgeRange`. An 
 - No personal data is transmitted — only a cryptographic proof of age range
 - No account creation required on the website
 - No cookies beyond session management
-- Proof verification runs in the browser. `verifyAge` makes one network request, to the verification bot, unless `verifierCheckUrl` is `null`; `waitForAuthResponse` connects only to the relay you give it
+- Proof verification runs in the browser. `verifyAge` makes one network request, to the verification bot, unless `verifierCheckUrl` is `null`; it opens no relay connection, and the proof reaches the modal over a same-origin `BroadcastChannel`, not the network. `waitForAuthResponse` connects only to the relay you give it
 - The verifier check is a single GET request that sends only the verifier's public key and returns confirmed or not
