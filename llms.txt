@@ -7,9 +7,9 @@
 
 For websites that need to gate content by age range (adult content, age
 brackets for minors) without running their own verification flow. A single
-function call opens a QR/modal, waits for the user's Signet app to respond,
-and checks both the credential and the issuing verifier's professional
-registration.
+function call opens a modal, waits for a signed response on a same-origin
+`BroadcastChannel` (no relay connection), and checks both the credential and
+the issuing verifier's professional registration.
 
 ## Getting Started
 
@@ -27,7 +27,8 @@ if (result.verified) {
 ```
 
 For a script tag / CDN build, use the IIFE export (`signet-verify/iife`),
-which exposes `window.Signet`.
+which exposes `window.Signet`, for example
+`https://cdn.jsdelivr.net/npm/signet-verify@0.7.1/dist/signet-verify.iife.js`.
 
 ## Key Concepts
 
@@ -38,10 +39,14 @@ which exposes `window.Signet`.
   register (GMC, SRA, TRA, etc.) via a verification bot; this can be relaxed
   with `acceptUnconfirmed` or pointed at a different bot with
   `verifierCheckUrl`.
-- **Same-device vs cross-device**: `verifyAge` covers the common same-device
-  QR/modal flow; `waitForAuthResponse` is the lower-level cross-device
-  primitive for a consumer that mints its own challenge and waits on a relay
-  for the signed response.
+- **Same-browser vs cross-device**: `verifyAge` covers the modal flow and
+  receives its response on a `BroadcastChannel` named
+  `signet-verify-<requestId>`; it makes one network request, to the
+  verification bot, and never connects to a relay (its `relayUrl` option is
+  only written into the request object). `waitForAuthResponse` is the
+  lower-level cross-device primitive for a consumer that mints its own
+  challenge and waits on a relay for the signed response; only it needs a
+  relay that serves kind-1059 gift wraps to an unauthenticated reader.
 - **The sign-in deadline**: a cross-device wait has one deadline,
   `issuedAt + AUTH_FRESHNESS_WINDOW_SEC`. `issuedAt` must be passed on every
   call for the same sign-in, including retries after the page was
@@ -50,18 +55,26 @@ which exposes `window.Signet`.
 ## API Surface
 
 - `verifyAge(requiredAgeRange, options?) => Promise<SignetVerifyResult>`:
-  the same-device verification flow.
+  the same-browser modal flow. `requiredAgeRange` must be one of
+  `'0-3'`, `'4-7'`, `'8-12'`, `'13-17'`, `'18+'` and is matched exactly.
+  Failures are reported in `result.error`, not as a rejection.
 - `waitForAuthResponse(options) => Promise<SignetAuthResult>`: the
-  cross-device primitive; see the README for the full option set
-  (`requestId`, `relayUrl`, `sessionPrivKey`, `expectedOrigin`, `issuedAt`,
-  `abortSignal`).
-- `AUTH_FRESHNESS_WINDOW_SEC`, `DEFAULT_RELAY_URL`: constants used to
-  compute and check the sign-in deadline.
+  cross-device primitive. It resolves on success and rejects with an `Error`
+  whose `message` and `code` are the failure code (`expired`, `timeout`,
+  `denied`, `aborted`, `relay-refused`, and others listed in the README).
+  Options: `requestId`, `relayUrl`, `sessionPrivKey` (a 32-byte
+  `Uint8Array`) and `expectedOrigin` are required; `issuedAt` (unix
+  seconds), `timeout` (milliseconds), `since` (unix seconds) and
+  `abortSignal` are optional. The README has the full option and result
+  tables.
+- `AUTH_FRESHNESS_WINDOW_SEC` (`300`, seconds), `DEFAULT_RELAY_URL`
+  (`'wss://nos.lol'`): constants used to compute and check the sign-in
+  deadline.
 - Result and option types: `SignetVerifyResult`, `SignetVerifyOptions`,
   `WaitForAuthOptions`, `SignetAuthResult`, `SignetAuthEvent`.
 
 ## Optional
 
 - Full API reference, error codes and age range values: [README](README.md)
-- Cross-device example: [examples/cross-device-login.html](examples/cross-device-login.html)
+- Cross-device example: [examples/cross-device-login.html](https://github.com/forgesworn/signet-verify/blob/main/examples/cross-device-login.html)
 - Release history: [CHANGELOG.md](CHANGELOG.md)

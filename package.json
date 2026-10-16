@@ -15,7 +15,8 @@
   },
   "files": [
     "dist",
-    "llms.txt"
+    "llms.txt",
+    "CHANGELOG.md"
   ],
   "homepage": "https://github.com/forgesworn/signet-verify#readme",
   "keywords": [
