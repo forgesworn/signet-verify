@@ -2,6 +2,8 @@
 
 Add privacy-preserving age verification to any website. One script tag, one function call. No personal data collected.
 
+`verifyAge` is the listening half of a same-browser exchange: it opens a modal and waits for a signed response message from a sender in the same origin. This package does not include that sender, and `verifyAge` does not hand the page the request ID the sender needs. See [What posts the response](#what-posts-the-response).
+
 ## Install
 
 ```bash
@@ -14,7 +16,7 @@ Script tag (the IIFE bundle exposes `window.Signet`; the version is pinned, so c
 
 ```html
 <button id="verify-btn">Verify your age</button>
-<script src="https://cdn.jsdelivr.net/npm/signet-verify@0.7.1/dist/signet-verify.iife.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/signet-verify@0.7.2/dist/signet-verify.iife.js"></script>
 <script>
   document.getElementById('verify-btn').addEventListener('click', async () => {
     const result = await Signet.verifyAge('18+');
@@ -37,15 +39,49 @@ const result = await verifyAge('18+');
 if (!result.verified) console.log('Not verified:', result.error);
 ```
 
+Both samples show the call and the result handling. `result.verified` becomes `true` only after a same-origin sender posts a valid `signet-verify-response` message for that call (see [The response message](#the-response-message)). Without one, the modal keeps waiting and the call resolves with `error: 'timeout'` after 120 seconds (the default `timeout`), or `error: 'cancelled'` if the user closes the modal.
+
 ## How It Works
 
 1. Website calls `Signet.verifyAge('18+')`
 2. A modal opens. The SDK builds a `signet-verify-request` (request ID, required age range, `relayUrl`, timestamp) but the modal shows only a truncated text placeholder, `signet:verify:` plus the first 40 characters of the base64 payload, not a rendered QR code. Those 40 characters stop before the request ID and the relay URL
-3. The modal listens on a `BroadcastChannel` named `signet-verify-<requestId>`. It opens no WebSocket and never reads from a relay. The proof must arrive as a `signet-verify-response` message carrying that request ID on that channel, so whatever posts it has to run in the same origin and browser profile as the page
+3. The modal listens on a `BroadcastChannel` named `signet-verify-<requestId>`. It opens no WebSocket and never reads from a relay. The proof must arrive as a `signet-verify-response` message carrying that request ID on that channel, so whatever posts it has to run in the same origin and browser profile as the page. Nothing in this package posts it (see below)
 4. The SDK checks the credential's signature, expiry and age range, then asks the verification bot about the verifier's professional registration
 5. Returns the result
 
 To receive a response from another device over a relay, use `waitForAuthResponse` (see below); `verifyAge` does not do that.
+
+### What posts the response
+
+Nothing in this package does. `signet-verify` contains the listener only, and the sender is code you provide, running in the same origin and browser profile as the page that called `verifyAge`.
+
+The sender needs the channel name, which contains the request ID. `verifyAge` generates that ID internally and does not expose it: it is not returned, not passed to a callback and not dispatched as an event, and the modal shows only the first 40 characters of the base64 request, which stop before the ID. The package therefore offers no supported way for the page, or for a Signet app on the user's phone, to learn it. Until you have wired up a sender that can, a real user cannot reach `verified: true` through `verifyAge`.
+
+### The response message
+
+The listener accepts one object on the channel `signet-verify-<requestId>`, where `<requestId>` is the 32-character hex ID (16 random bytes) generated for that call. The shape is `VerifyResponse` from the `signet-protocol` package, which is the canonical type:
+
+```ts
+{
+  type: 'signet-verify-response',
+  requestId: string,       // must equal the ID of the open modal
+  credential: {            // a signed Nostr event
+    id: string,            // 64 hex chars: SHA-256 of JSON [0, pubkey, created_at, kind, tags, content]
+    kind: 30470,           // anything else is rejected
+    pubkey: string,        // 64 hex chars: the verifier's key, returned as verifierPubkey
+    created_at: number,    // unix seconds, returned as issuedAt
+    tags: string[][],      // must include 'tier', 'age-range' and 'entity-type'; optional 'expires' (unix seconds)
+    content: string,       // at most 65536 characters
+    sig: string,           // 128 hex chars: BIP-340 Schnorr signature over id by pubkey
+  },
+  subjectPubkey: string,   // part of the protocol type; verifyAge does not read it
+}
+```
+
+How the listener treats a message:
+
+- It silently drops anything that is not an object, whose `type` or `requestId` does not match, or whose `credential` is missing or has no `tags` array. The modal keeps waiting.
+- Any other message closes the modal and settles the call, so the first one wins and later messages are ignored. The credential is then checked: a failed structural or signature check (including more than 100 tags, a tag value over 1024 characters, or a missing `tier`, `age-range` or `entity-type` tag) gives `invalid-credential`, a past `expires` gives `credential-expired`, and an `age-range` tag that is not equal to the required range gives `age-range-not-met`. The verifier check then follows, as described under Verifier Trust.
 
 ## Verifier Trust
 

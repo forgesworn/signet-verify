@@ -9,7 +9,10 @@ For websites that need to gate content by age range (adult content, age
 brackets for minors) without running their own verification flow. A single
 function call opens a modal, waits for a signed response on a same-origin
 `BroadcastChannel` (no relay connection), and checks both the credential and
-the issuing verifier's professional registration.
+the issuing verifier's professional registration. The package contains the
+listener only: nothing in it posts that response, and `verifyAge` does not
+expose the request ID a sender needs, so a real user cannot reach
+`verified: true` until you wire up a same-origin sender of your own.
 
 ## Getting Started
 
@@ -26,9 +29,14 @@ if (result.verified) {
 }
 ```
 
+This resolves with `verified: true` only after a same-origin sender posts a
+valid `signet-verify-response` message for the call. Otherwise the modal keeps
+waiting and the call resolves with `error: 'timeout'` after 120 seconds, or
+`error: 'cancelled'` if the user closes it.
+
 For a script tag / CDN build, use the IIFE export (`signet-verify/iife`),
 which exposes `window.Signet`, for example
-`https://cdn.jsdelivr.net/npm/signet-verify@0.7.1/dist/signet-verify.iife.js`.
+`https://cdn.jsdelivr.net/npm/signet-verify@0.7.2/dist/signet-verify.iife.js`.
 
 ## Key Concepts
 
@@ -43,7 +51,14 @@ which exposes `window.Signet`, for example
   receives its response on a `BroadcastChannel` named
   `signet-verify-<requestId>`; it makes one network request, to the
   verification bot, and never connects to a relay (its `relayUrl` option is
-  only written into the request object). `waitForAuthResponse` is the
+  only written into the request object). The message it accepts is
+  `{ type: 'signet-verify-response', requestId, credential, subjectPubkey }`
+  (the `VerifyResponse` type from `signet-protocol`; `subjectPubkey` is not
+  read), where `requestId` is the 32-character hex ID generated for that call
+  and `credential` is a signed kind-30470 Nostr event whose tags include
+  `tier`, `age-range` and `entity-type` (and optionally `expires`). The README
+  has the full field list and how each failure maps to an error code.
+  `waitForAuthResponse` is the
   lower-level cross-device primitive for a consumer that mints its own
   challenge and waits on a relay for the signed response; only it needs a
   relay that serves kind-1059 gift wraps to an unauthenticated reader.
