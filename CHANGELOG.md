@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.3 (2026-10-18)
+
+### Bug Fixes
+
+- close the re-audit's medium-severity doc gaps (#51) (docs)
+
+
+
 ## 0.7.2 (2026-10-16)
 
 ### Bug Fixes
