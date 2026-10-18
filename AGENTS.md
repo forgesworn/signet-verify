@@ -32,7 +32,11 @@ dist/                   - build output (git-ignored)
   the file grows large enough to justify splitting.
 - Canonical protocol types (`VerifyRequest`, `VerifyResponse`) come from
   `signet-protocol` and are imported with `import type` only, so the IIFE
-  bundle carries no runtime dependency on it.
+  bundle carries no runtime dependency on it. They reach no exported
+  signature, so the emitted `dist/signet-verify.d.ts` does not mention
+  `signet-protocol` and a devDependency is correct. If an exported type ever
+  uses them, move it to `dependencies` or `peerDependencies`; check with
+  `grep signet-protocol dist/signet-verify.d.ts` after `npm run build`.
 - `issuedAt` (unix seconds) anchors every cross-device wait, including
   retries; it must not be recomputed on restart.
 
@@ -60,6 +64,23 @@ dist/                   - build output (git-ignored)
   before it, so a real user cannot reach `verified: true` without a
   same-origin sender of the integrator's own. Never write docs or examples
   that present `verifyAge` as working end to end on its own.
+- `verifierCheckUrl: null` does not accept a credential: `verifierOk` is
+  `acceptUnconfirmed || verifierConfirmed === true`, so with the check
+  skipped (or failed, or a non-`https://` URL) `verified` is `false` with
+  `verifier-check-unavailable` unless `acceptUnconfirmed` is also `true`.
+  The JSDoc on `verifierCheckUrl` in the source ("accept any signed
+  credential") is wrong on this; the docs must follow the code.
+- `waitForAuthResponse` verifies in the browser only. Keep the README section
+  telling consumers to re-verify `authEvent` on their server before creating
+  a session, and that `credential` is passed through unchecked.
+- Node: the ESM build imports cleanly in Node 20.19 or later (the
+  `@noble/*` engines floor, mirrored in `package.json`) and sets
+  `window.Signet` only if `window` exists. `verifyAge` is browser only (it
+  rejects with `ReferenceError` in Node); `waitForAuthResponse` needs only a
+  global `WebSocket` (Node 22 and later) and otherwise rejects `relay-error`.
+- The CDN pin (`signet-verify@x.y.z`) in `README.md` and `llms.txt` is not
+  bumped by the release bot, which only edits `package.json` and
+  `CHANGELOG.md`. Update both by hand on each release.
 - `since` overrides `issuedAt` for the relay query anchor; only set it
   directly if you need to bypass the `issuedAt` derivation.
 - The IIFE build must stay free of runtime dependencies beyond what

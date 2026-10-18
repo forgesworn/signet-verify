@@ -35,6 +35,9 @@
     "sdk",
     "browser"
   ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
   "publishConfig": {
     "provenance": true
   },

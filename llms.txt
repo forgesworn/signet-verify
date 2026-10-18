@@ -46,7 +46,12 @@ which exposes `window.Signet`, for example
   when the issuing verifier is checked against a public professional
   register (GMC, SRA, TRA, etc.) via a verification bot; this can be relaxed
   with `acceptUnconfirmed` or pointed at a different bot with
-  `verifierCheckUrl`.
+  `verifierCheckUrl`. Setting `verifierCheckUrl: null` skips the check but
+  does not accept the credential on its own: `verifierConfirmed` is then
+  `null` and the result is `verified: false` with
+  `error: 'verifier-check-unavailable'` (as it is when the bot is
+  unreachable or the URL is not `https://`) unless `acceptUnconfirmed` is
+  also `true`.
 - **Same-browser vs cross-device**: `verifyAge` covers the modal flow and
   receives its response on a `BroadcastChannel` named
   `signet-verify-<requestId>`; it makes one network request, to the
@@ -67,6 +72,21 @@ which exposes `window.Signet`, for example
   call for the same sign-in, including retries after the page was
   backgrounded, or the relay query anchor is wrong.
 
+- **Node, SSR and tests**: the package is ESM only and loads safely in Node
+  (20.19 or later, the floor set by its `@noble/curves` and `@noble/hashes`
+  dependencies) because it touches no browser global at import time.
+  `verifyAge` is browser only: in Node it rejects with a `ReferenceError`
+  (except for an invalid age range, which resolves with
+  `invalid-age-range`). `waitForAuthResponse` needs only a global
+  `WebSocket` (Node 22 and later); without one it rejects with
+  `relay-error`.
+- **Verify on your server**: `waitForAuthResponse` checks the response in the
+  browser only. Before creating a session, re-verify `authEvent` on your
+  server (event id and signature, `challenge` tag equal to the challenge your
+  server issued and accepted once, `origin` tag, `created_at` within
+  `AUTH_FRESHNESS_WINDOW_SEC`). `credential` is passed through unchecked.
+  The README section "Verify the result on your server" has a worked check.
+
 ## API Surface
 
 - `verifyAge(requiredAgeRange, options?) => Promise<SignetVerifyResult>`:
@@ -81,7 +101,9 @@ which exposes `window.Signet`, for example
   `Uint8Array`) and `expectedOrigin` are required; `issuedAt` (unix
   seconds), `timeout` (milliseconds), `since` (unix seconds) and
   `abortSignal` are optional. The README has the full option and result
-  tables.
+  tables, and its cross-device example needs `@noble/curves@2` and
+  `@noble/hashes@2` installed (it imports them directly) and uses
+  `https://mysignet.app`, the Signet app's production origin, in the auth URL.
 - `AUTH_FRESHNESS_WINDOW_SEC` (`300`, seconds), `DEFAULT_RELAY_URL`
   (`'wss://nos.lol'`): constants used to compute and check the sign-in
   deadline.
