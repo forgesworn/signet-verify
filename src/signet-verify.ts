@@ -5,7 +5,7 @@
  *   import { verifyAge, waitForAuthResponse } from 'signet-verify';
  *
  * Script-tag / CDN usage (IIFE bundle exposes `window.Signet`):
- *   <script src="https://cdn.signet.forgesworn.dev/signet-verify.iife.js"></script>
+ *   <script src="https://cdn.jsdelivr.net/npm/signet-verify@0.7.2/dist/signet-verify.iife.js"></script>
  *   <script>
  *     const result = await Signet.verifyAge('18+');
  *     if (result.verified) { // allow access }
@@ -42,7 +42,8 @@ export interface SignetVerifyOptions {
   /**
    * URL of the verification bot that checks verifier credentials against public registers.
    * Default: 'https://verify.signet.forgesworn.dev'
-   * Set to null to skip verifier checking (accept any signed credential).
+   * Set to null to skip the bot: verifierConfirmed is then null, so the result fails
+   * with verifier-check-unavailable unless acceptUnconfirmed is true.
    * Anyone can run their own bot — the URL is configurable, not a central authority.
    */
   verifierCheckUrl?: string | null;
