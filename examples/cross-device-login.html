@@ -48,12 +48,12 @@
     <pre id="result" style="font-size: 0.8rem; overflow:auto; margin-top: 12px;"></pre>
   </div>
 
-  <!-- signet-verify SDK. After building locally: `npm run build` in signet-verify/. -->
-  <script src="../dist/signet-verify.js"></script>
+  <!-- signet-verify SDK, IIFE build (exposes window.Signet). After building locally: `npm run build` in signet-verify/. -->
+  <script src="../dist/signet-verify.iife.js"></script>
   <!-- @noble/curves for session keypair generation (loaded via jsdelivr for self-contained demo). -->
   <script type="module">
-    import { schnorr } from 'https://cdn.jsdelivr.net/npm/@noble/curves@1.8.1/secp256k1.js';
-    import { bytesToHex } from 'https://cdn.jsdelivr.net/npm/@noble/hashes@1.7.1/utils.js';
+    import { schnorr } from 'https://cdn.jsdelivr.net/npm/@noble/curves@2.4.0/secp256k1.js/+esm';
+    import { bytesToHex } from 'https://cdn.jsdelivr.net/npm/@noble/hashes@2.4.0/utils.js/+esm';
 
     const statusEl = document.getElementById('status');
     const resultEl = document.getElementById('result');
@@ -84,10 +84,11 @@
       resultEl.textContent = '';
 
       // 1. Generate ephemeral session keypair
-      const sessionPrivKey = schnorr.utils.randomPrivateKey();
+      const sessionPrivKey = schnorr.utils.randomSecretKey();
       const sessionPubkeyHex = bytesToHex(schnorr.getPublicKey(sessionPrivKey));
 
-      // 2. Generate challenge (32 bytes hex)
+      // 2. Generate challenge (32 bytes hex) and note when this sign-in was issued
+      const issuedAt = Math.floor(Date.now() / 1000);
       const challengeBytes = new Uint8Array(32);
       crypto.getRandomValues(challengeBytes);
       const challenge = bytesToHex(challengeBytes);
@@ -107,7 +108,7 @@
         origin,
         name: 'Cross-Device Demo',
         callback,
-        t: String(Math.floor(Date.now() / 1000)),
+        t: String(issuedAt),
         relay,
         sessionPubkey: sessionPubkeyHex,
       }).toString();
@@ -122,7 +123,7 @@
           relayUrl: relay,
           sessionPrivKey,
           expectedOrigin: origin,
-          timeout: 180_000,
+          issuedAt,
         });
         setStatus('success', '✓ Signed in as ' + result.pubkey.slice(0, 16) + '…');
         resultEl.textContent = JSON.stringify({
