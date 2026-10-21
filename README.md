@@ -223,7 +223,7 @@ again. This was a real, 100%-reproducible failure before 0.5.2.
 | `aborted` | You aborted via `abortSignal` | Nothing |
 | `relay-error` | The socket failed. Rejected only where there is no `document` (a non-browser runtime); in a browser the wait reconnects while the page is visible and gives up with `timeout` or `expired`. A runtime with no global `WebSocket` (Node 20, for example) gets it at once; see Node, SSR and tests | A retry, anchored to the same `issuedAt` |
 | `relay-closed` | The socket closed. Same rule as `relay-error` | A retry, anchored to the same `issuedAt` |
-| `relay-refused` | The relay closed the subscription — `err.reason` has its text (e.g. `auth-required`) | A relay that serves gift wraps to an unauthenticated reader. `relay.damus.io` currently does not; `nos.lol` (the default) does |
+| `relay-refused` | The relay closed the subscription — `err.reason` has its text (e.g. `auth-required`) | A relay that serves gift wraps to an unauthenticated reader. `relay.damus.io` currently does not; `relay.primal.net` (the default) does |
 | `invalid-issued-at` | `issuedAt` looks like the wrong unit (e.g. milliseconds) or is too far in the future | A bug in your code, not a retry; check you're passing unix **seconds** |
 | `invalid-request-id`, `invalid-session-privkey`, `invalid-relay-url`, `invalid-expected-origin` | The matching option failed validation before any connection was made | A bug in your code, not a retry; see the option table below |
 
@@ -242,7 +242,7 @@ Returns `Promise<SignetVerifyResult>`. Failures are reported in `result.error`, 
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `relayUrl` | `string` | `DEFAULT_RELAY_URL` (`wss://nos.lol`) | Written into the `relayUrl` field of the request object `verifyAge` builds. `verifyAge` never connects to it, the response does not travel over it (it arrives on a `BroadcastChannel`), and the text the modal shows does not include it. The kind-1059 gift-wrap requirement under `waitForAuthResponse` therefore does not apply to this option |
+| `relayUrl` | `string` | `DEFAULT_RELAY_URL` (`wss://relay.primal.net`) | Written into the `relayUrl` field of the request object `verifyAge` builds. `verifyAge` never connects to it, the response does not travel over it (it arrives on a `BroadcastChannel`), and the text the modal shows does not include it. The kind-1059 gift-wrap requirement under `waitForAuthResponse` therefore does not apply to this option |
 | `theme` | `'light' \| 'dark' \| 'auto'` | `'auto'` | Modal colour scheme |
 | `timeout` | `number` | `120000` | Timeout in milliseconds, clamped to 5000 to 600000 |
 | `verifierCheckUrl` | `string \| null` | `'https://verify.signet.forgesworn.dev'` | Verification bot URL. Set to `null` to skip the check; unless `acceptUnconfirmed` is also `true`, `verified` is then `false` with `verifier-check-unavailable`. A URL that does not start with `https://` counts as a failed check |
@@ -305,7 +305,7 @@ Returns `Promise<SignetAuthResult>`. It resolves with the verified result and re
 | `bunkerUri` | `string` (optional) | A `bunker://` URI for upgrading to a live signer. Absent on auth-only flows. Only its `bunker://` prefix is checked |
 | `createdAt` | `number` | Unix seconds at which the auth event was signed |
 
-**Constants:** `AUTH_FRESHNESS_WINDOW_SEC` (`300`, seconds) and `DEFAULT_RELAY_URL` (`'wss://nos.lol'`).
+**Constants:** `AUTH_FRESHNESS_WINDOW_SEC` (`300`, seconds) and `DEFAULT_RELAY_URL` (`'wss://relay.primal.net'`).
 
 ### Verify the result on your server
 
