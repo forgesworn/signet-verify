@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.4 (2026-10-21)
+
+### Bug Fixes
+
+- move the default cross-device relay off nos.lol (#54)
+
+
+
 ## 0.7.3 (2026-10-18)
 
 ### Bug Fixes
