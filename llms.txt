@@ -105,7 +105,7 @@ which exposes `window.Signet`, for example
   `@noble/hashes@2` installed (it imports them directly) and uses
   `https://mysignet.app`, the Signet app's production origin, in the auth URL.
 - `AUTH_FRESHNESS_WINDOW_SEC` (`300`, seconds), `DEFAULT_RELAY_URL`
-  (`'wss://nos.lol'`): constants used to compute and check the sign-in
+  (`'wss://relay.primal.net'`): constants used to compute and check the sign-in
   deadline.
 - Result and option types: `SignetVerifyResult`, `SignetVerifyOptions`,
   `WaitForAuthOptions`, `SignetAuthResult`, `SignetAuthEvent`.

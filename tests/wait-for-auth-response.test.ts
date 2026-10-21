@@ -1118,9 +1118,11 @@ describe('DEFAULT_RELAY_URL', () => {
   it('is a public relay that serves gift wraps to an unauthenticated reader', () => {
     // relay.damus.io was verifyAge's default. It accepts a gift wrap, then
     // refuses kind-1059 reads to an unauthenticated client with its AUTH
-    // misconfigured, so no client can fetch one. nos.lol accepts the gift wrap
-    // and serves it back without AUTH. The Signet app replies on whichever
-    // relay the request names, so no operator relay is needed.
-    expect(DEFAULT_RELAY_URL).toBe('wss://nos.lol');
+    // misconfigured, so no client can fetch one. nos.lol, the next default,
+    // stopped answering in October 2026. relay.primal.net accepts the gift
+    // wrap and serves it back without AUTH (checked 21 October 2026). The
+    // Signet app replies on whichever relay the request names, so no operator
+    // relay is needed.
+    expect(DEFAULT_RELAY_URL).toBe('wss://relay.primal.net');
   });
 });
