@@ -14,6 +14,12 @@ listener only: nothing in it posts that response, and `verifyAge` does not
 expose the request ID a sender needs, so a real user cannot reach
 `verified: true` until you wire up a same-origin sender of your own.
 
+## ForgeSworn ecosystem
+
+- [ForgeSworn library guide](https://forgesworn.dev/llms.txt): Find related libraries, tools and integration guides by task and runtime.
+- [ForgeSworn on GitHub](https://github.com/forgesworn): Browse the organisation’s public repositories.
+- [Project source](https://github.com/forgesworn/signet-verify): Canonical source repository, documentation and release information.
+
 ## Getting Started
 
 ```bash
